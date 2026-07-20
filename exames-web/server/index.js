@@ -173,16 +173,38 @@ app.post("/api/tips", async (req, res) => {
   }
 });
 
+// ---------- Export backup ----------
+app.get("/api/export", (req, res) => {
+  try {
+    const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, created_at as createdAt FROM profiles").all();
+    const backup = { version: 1, exportedAt: new Date().toISOString(), profiles, batches: {} };
+    for (const p of profiles) {
+      const batchRows = db
+        .prepare("SELECT id as batchId, date, lab, file_hash as hash, pdf_filename as fileName FROM batches WHERE profile_id = ?")
+        .all(p.id);
+      const list = [];
+      for (const b of batchRows) {
+        const results = db
+          .prepare("SELECT name, value, unit, ref, status, category FROM results WHERE batch_id = ?")
+          .all(b.batchId);
+        const pdfPath = path.join(pdfDir, `${b.batchId}.pdf`);
+        let pdfBase64 = null;
+        if (fs.existsSync(pdfPath)) {
+          pdfBase64 = fs.readFileSync(pdfPath).toString("base64");
+        }
+        list.push({ batchId: b.batchId, date: b.date, lab: b.lab, hash: b.hash, fileName: b.fileName, results, pdfBase64 });
+      }
+      backup.batches[p.id] = list;
+    }
+    res.json(backup);
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao gerar backup" });
+  }
+});
+
 // ---------- Import backup ----------
 app.post("/api/import", (req, res) => {
   try {
-    const secret = process.env.IMPORT_SECRET;
-    if (!secret) {
-      return res.status(403).json({ error: "Defina a variável de ambiente IMPORT_SECRET no servidor antes de usar essa rota." });
-    }
-    if (req.headers["x-import-secret"] !== secret) {
-      return res.status(401).json({ error: "Chave de importação inválida." });
-    }
     const { profiles, batches } = req.body || {};
     if (!Array.isArray(profiles)) return res.status(400).json({ error: "Formato de backup inválido." });
 

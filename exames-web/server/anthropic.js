@@ -18,9 +18,15 @@ export async function callClaude(messages, maxTokens = 1000) {
     }),
   });
   const data = await resp.json();
-  if (data.error) throw new Error(data.error.message || "Erro na API da Anthropic");
+  if (!resp.ok || data.error) {
+    console.error("Erro da API Anthropic:", resp.status, JSON.stringify(data));
+    throw new Error(data?.error?.message || `Erro na API da Anthropic (status ${resp.status}). Veja os logs do servidor no Railway para mais detalhes.`);
+  }
   const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-  if (!text) throw new Error("Resposta vazia da IA");
+  if (!text) {
+    console.error("Resposta da Anthropic sem texto. stop_reason:", data.stop_reason, "content:", JSON.stringify(data.content));
+    throw new Error(`A IA não retornou texto (stop_reason: ${data.stop_reason || "desconhecido"}). Veja os logs do servidor no Railway para mais detalhes.`);
+  }
   return text;
 }
 

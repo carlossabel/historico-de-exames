@@ -3,6 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
+  FileUp, Download,
 } from "lucide-react";
 import * as api from "./api.js";
 
@@ -22,6 +23,23 @@ const PROFILE_COLORS = [
   { bg: "bg-indigo-100", text: "text-indigo-700" },
   { bg: "bg-rose-100", text: "text-rose-700" },
 ];
+
+function downloadJson(filename, obj) {
+  try {
+    const blob = new Blob([JSON.stringify(obj)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
 
 function uid() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -55,9 +73,12 @@ export default function App() {
   const [profiles, setProfiles] = useState(null);
   const [screen, setScreen] = useState({ name: "home" });
   const [showAddProfile, setShowAddProfile] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+
+  const refreshProfiles = async () => setProfiles(await api.getProfiles());
 
   useEffect(() => {
-    (async () => setProfiles(await api.getProfiles()))();
+    refreshProfiles();
   }, []);
 
   const addProfile = async (name) => {
@@ -84,29 +105,68 @@ export default function App() {
   return (
     <div className="w-full max-w-3xl mx-auto px-4 py-8">
       {screen.name === "home" && (
-        <HomeScreen profiles={profiles} onOpen={(id) => setScreen({ name: "profile", profileId: id })} onAdd={() => setShowAddProfile(true)} onRemove={removeProfile} />
+        <HomeScreen profiles={profiles} onOpen={(id) => setScreen({ name: "profile", profileId: id })} onAdd={() => setShowAddProfile(true)} onRemove={removeProfile} onImport={() => setShowImport(true)} />
       )}
       {screen.name === "profile" && (
         <ProfileScreen profile={profiles.find((p) => p.id === screen.profileId)} onBack={() => setScreen({ name: "home" })} />
       )}
       {showAddProfile && <AddProfileModal onClose={() => setShowAddProfile(false)} onConfirm={addProfile} />}
+      {showImport && <ImportModal onClose={() => setShowImport(false)} onDone={refreshProfiles} />}
     </div>
   );
 }
 
-function HomeScreen({ profiles, onOpen, onAdd, onRemove }) {
+function HomeScreen({ profiles, onOpen, onAdd, onRemove, onImport }) {
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportMsg, setExportMsg] = useState(null);
+
+  const handleExport = async () => {
+    setExporting(true);
+    setExportMsg(null);
+    try {
+      const backup = await api.exportBackup();
+      const ok = downloadJson(`backup-exames-${new Date().toISOString().slice(0, 10)}.json`, backup);
+      setExportMsg(
+        ok
+          ? "Backup baixado — procure o arquivo na pasta de Downloads padrão do seu navegador (o nome começa com \"backup-exames-\")."
+          : "Não consegui iniciar o download. Tente novamente ou use outro navegador."
+      );
+    } catch (e) {
+      setExportMsg("Não consegui gerar o backup agora. Tente novamente.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
         <div>
           <h1 className="text-xl font-medium text-slate-900">Histórico de exames</h1>
           <p className="text-sm text-slate-500 mt-0.5">Escolha um perfil ou adicione uma nova pessoa</p>
         </div>
-        <button onClick={onAdd} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800 active:scale-95 transition">
-          <Plus size={16} /> Novo perfil
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={onImport} className="flex items-center gap-1.5 border border-slate-300 text-slate-700 text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-50">
+            <FileUp size={15} /> Importar backup
+          </button>
+          {profiles.length > 0 && (
+            <button onClick={handleExport} disabled={exporting} className="flex items-center gap-1.5 border border-slate-300 text-slate-700 text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">
+              {exporting ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+              {exporting ? "Gerando..." : "Exportar backup"}
+            </button>
+          )}
+          <button onClick={onAdd} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800 active:scale-95 transition">
+            <Plus size={16} /> Novo perfil
+          </button>
+        </div>
       </div>
+
+      {exportMsg && (
+        <div className="mb-4 flex items-start gap-2 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          <Info size={13} className="mt-0.5 shrink-0" /> {exportMsg}
+        </div>
+      )}
 
       {profiles.length === 0 ? (
         <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
@@ -189,6 +249,80 @@ function ConfirmModal({ title, message, confirmLabel, onCancel, onConfirm }) {
         <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
         <button onClick={onConfirm} className="text-sm px-3.5 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700">{confirmLabel}</button>
       </div>
+    </ModalShell>
+  );
+}
+
+function ImportModal({ onClose, onDone }) {
+  const [file, setFile] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+
+  const handleImport = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      if (!file) throw new Error("Escolha o arquivo de backup (.json).");
+      const text = await file.text();
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch (e) {
+        throw new Error("Esse arquivo não é um JSON válido de backup.");
+      }
+      const data = await api.importBackup(parsed);
+      setResult(data);
+      await onDone();
+    } catch (e) {
+      setError(e.message || "Erro ao importar backup.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <ModalShell onClose={onClose} title="Importar backup">
+      {!result ? (
+        <>
+          <p className="text-xs text-slate-500 mb-4">
+            Selecione o arquivo <code>backup-exames-....json</code> exportado do artefato do Claude. Os perfis e exames dele serão adicionados aos que já existem aqui.
+          </p>
+          <label className="text-xs text-slate-500 mb-1 block">Arquivo de backup</label>
+          <input
+            type="file"
+            accept="application/json,.json"
+            onChange={(e) => setFile(e.target.files?.[0] || null)}
+            className="w-full text-sm mb-4 border border-slate-300 rounded-lg px-2.5 py-1.5"
+          />
+          {error && (
+            <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
+            <button
+              onClick={handleImport}
+              disabled={loading || !file}
+              className="flex items-center gap-1.5 text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
+            >
+              {loading && <Loader2 size={14} className="animate-spin" />}
+              {loading ? "Importando..." : "Importar"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div>
+          <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5 mb-4 text-sm">
+            <CheckCircle2 size={16} className="shrink-0" />
+            Importado: {result.importedProfiles} perfil(is), {result.importedBatches} laudo(s), {result.importedResults} resultado(s).
+          </div>
+          <div className="flex justify-end">
+            <button onClick={onClose} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800">Fechar</button>
+          </div>
+        </div>
+      )}
     </ModalShell>
   );
 }

@@ -60,24 +60,20 @@ variáveis de ambiente da hospedagem, nunca no código ou no frontend.
 ## Importar um backup exportado do artefato do Claude
 
 Se você usou a versão do app dentro do Claude antes de migrar para este
-projeto, dá pra trazer aquele histórico pra cá:
+projeto, dá pra trazer aquele histórico pra cá direto pelo site, sem usar
+terminal:
 
 1. No artefato do Claude, clique em **Exportar backup** na tela inicial.
-   Isso baixa um arquivo `backup-exames-AAAA-MM-DD.json`.
-2. No Railway, defina a variável de ambiente `IMPORT_SECRET` com uma senha
-   forte (só você vai saber).
-3. No seu computador, com o arquivo baixado na pasta atual, rode:
-   ```bash
-   curl -X POST https://SEU-APP.up.railway.app/api/import \
-     -H "Content-Type: application/json" \
-     -H "x-import-secret: SUA_SENHA_DO_IMPORT_SECRET" \
-     --data @backup-exames-AAAA-MM-DD.json
-   ```
-4. A resposta mostra quantos perfis, laudos e resultados foram importados.
-5. **Depois de importar, remova a variável `IMPORT_SECRET`** (ou troque o
-   valor) — essa rota aceita qualquer JSON no formato certo e escreve
-   direto no banco, então não vale a pena deixá-la disponível
-   indefinidamente.
+   Isso baixa um arquivo `backup-exames-AAAA-MM-DD.json` na pasta padrão de
+   downloads do seu navegador.
+2. Abra o site já publicado e clique em **Importar backup** na tela inicial.
+3. Selecione o arquivo `.json` baixado e clique em **Importar**.
+4. A tela mostra quantos perfis, laudos e resultados foram importados.
+
+**Atenção:** essa rota (`/api/import`) não pede senha nem autenticação —
+qualquer pessoa com a URL do seu site consegue usá-la para inserir dados no
+seu banco. Isso é consistente com o restante do app (que também não tem
+login), mas vale saber antes de divulgar o link amplamente.
 
 ## Avisos importantes
 

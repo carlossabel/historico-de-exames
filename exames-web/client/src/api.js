@@ -58,6 +58,24 @@ export function pdfUrl(profileId, batchId) {
   return `/api/profiles/${profileId}/batches/${batchId}/pdf`;
 }
 
+export async function exportBackup() {
+  const r = await fetch("/api/export");
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao exportar backup");
+  return data;
+}
+
+export async function importBackup(backupData) {
+  const r = await fetch("/api/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(backupData),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao importar backup");
+  return data;
+}
+
 export async function getTips(results) {
   const r = await fetch("/api/tips", {
     method: "POST",
