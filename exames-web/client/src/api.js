@@ -50,6 +50,17 @@ export async function saveBatch(profileId, payload) {
   return r.json();
 }
 
+export async function updateBatch(profileId, batchId, payload) {
+  const r = await fetch(`/api/profiles/${profileId}/batches/${batchId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao atualizar laudo");
+  return data;
+}
+
 export async function deleteBatch(profileId, batchId) {
   await fetch(`/api/profiles/${profileId}/batches/${batchId}`, { method: "DELETE" });
 }

@@ -90,6 +90,22 @@ app.get("/api/profiles/:profileId/batches/:batchId/pdf", (req, res) => {
   fs.createReadStream(pdfPath).pipe(res);
 });
 
+app.put("/api/profiles/:profileId/batches/:batchId", (req, res) => {
+  try {
+    const { batchId } = req.params;
+    const b = req.body || {};
+    const existing = db.prepare("SELECT id FROM batches WHERE id = ?").get(batchId);
+    if (!existing) return res.status(404).json({ error: "Laudo não encontrado" });
+    if (!b.date) return res.status(400).json({ error: "Data é obrigatória" });
+    db.prepare("UPDATE batches SET date=?, lab=?, doctor=? WHERE id=?").run(
+      b.date, b.lab || "", b.doctor || "", batchId
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao atualizar laudo" });
+  }
+});
+
 app.delete("/api/profiles/:profileId/batches/:batchId", (req, res) => {
   const { batchId } = req.params;
   const pdfPath = path.join(pdfDir, `${batchId}.pdf`);

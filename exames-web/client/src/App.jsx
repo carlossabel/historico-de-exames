@@ -506,6 +506,12 @@ function ProfileScreen({ profile, onBack, initialTab }) {
     refreshAlerts();
   };
 
+  const editBatch = async (batchId, payload) => {
+    await api.updateBatch(profile.id, batchId, payload);
+    setIndex((prev) => (prev || []).map((b) => (b.batchId === batchId ? { ...b, ...payload } : b)));
+    setBatches((prev) => (prev[batchId] ? { ...prev, [batchId]: { ...prev[batchId], ...payload } } : prev));
+  };
+
   if (index === null) {
     return <div className="flex justify-center py-16 text-slate-400"><Loader2 className="animate-spin" size={22} /></div>;
   }
@@ -613,7 +619,7 @@ function ProfileScreen({ profile, onBack, initialTab }) {
         </div>
       )}
 
-      {index.length > 0 && <BatchHistory index={index} profileId={profile.id} onDelete={removeBatch} />}
+      {index.length > 0 && <BatchHistory index={index} profileId={profile.id} onDelete={removeBatch} onEdit={editBatch} />}
 
       {selectedExam && <ExamEvolutionModal examName={selectedExam} orderedBatchIds={orderedBatchIds} batches={batches} onClose={() => setSelectedExam(null)} />}
 
@@ -715,8 +721,9 @@ function ExamTable({ results, onSelectExam }) {
   );
 }
 
-function BatchHistory({ index, profileId, onDelete }) {
+function BatchHistory({ index, profileId, onDelete, onEdit }) {
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [editBatch, setEditBatch] = useState(null);
   return (
     <div className="mt-6">
       <p className="text-sm font-medium text-slate-700 mb-2">Laudos guardados</p>
@@ -734,6 +741,9 @@ function BatchHistory({ index, profileId, onDelete }) {
               <a href={api.pdfUrl(profileId, b.batchId)} target="_blank" rel="noreferrer" className="text-slate-400 hover:text-slate-700 p-1.5 inline-flex" aria-label="Abrir PDF original">
                 <FileText size={15} />
               </a>
+              <button onClick={() => setEditBatch(b)} className="text-slate-300 hover:text-slate-700 p-1.5" aria-label="Editar laudo">
+                <Pencil size={15} />
+              </button>
               <button onClick={() => setConfirmDelete(b)} className="text-slate-300 hover:text-red-500 p-1.5" aria-label="Excluir laudo">
                 <Trash2 size={15} />
               </button>
@@ -750,7 +760,72 @@ function BatchHistory({ index, profileId, onDelete }) {
           onConfirm={() => { onDelete(confirmDelete.batchId); setConfirmDelete(null); }}
         />
       )}
+      {editBatch && (
+        <BatchEditModal
+          batch={editBatch}
+          onCancel={() => setEditBatch(null)}
+          onSave={async (payload) => { await onEdit(editBatch.batchId, payload); setEditBatch(null); }}
+        />
+      )}
     </div>
+  );
+}
+
+function BatchEditModal({ batch, onCancel, onSave }) {
+  const [date, setDate] = useState(batch.date || "");
+  const [lab, setLab] = useState(batch.lab || "");
+  const [doctor, setDoctor] = useState(batch.doctor || "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleSave = async () => {
+    if (!date) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave({ date, lab, doctor });
+    } catch (e) {
+      setError(e.message || "Erro ao salvar.");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell onClose={onCancel} title="Editar laudo">
+      <p className="text-xs text-slate-500 mb-3">
+        Edite os dados desse laudo manualmente. Isso não reprocessa o PDF nem altera os exames já salvos.
+      </p>
+      <div className="mb-3">
+        <label className="text-xs text-slate-500 mb-1 block">Data da coleta</label>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+      </div>
+      <div className="mb-3">
+        <label className="text-xs text-slate-500 mb-1 block">Laboratório</label>
+        <input value={lab} onChange={(e) => setLab(e.target.value)} placeholder="Opcional" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+      </div>
+      <div className="mb-4">
+        <label className="text-xs text-slate-500 mb-1 block">Médico solicitante</label>
+        <input value={doctor} onChange={(e) => setDoctor(e.target.value)} placeholder="Opcional" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+      </div>
+
+      {error && (
+        <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2">
+        <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
+        <button
+          disabled={!date || saving}
+          onClick={handleSave}
+          className="flex items-center gap-1.5 text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
+        >
+          {saving && <Loader2 size={14} className="animate-spin" />}
+          {saving ? "Salvando..." : "Salvar"}
+        </button>
+      </div>
+    </ModalShell>
   );
 }
 
