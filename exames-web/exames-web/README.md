@@ -66,26 +66,14 @@ terminal:
 1. No artefato do Claude, clique em **Exportar backup** na tela inicial.
    Isso baixa um arquivo `backup-exames-AAAA-MM-DD.json` na pasta padrão de
    downloads do seu navegador.
-2. No Railway, defina a variável de ambiente `IMPORT_SECRET` com uma senha
-   forte (só você vai saber).
-3. Abra o site já publicado e clique em **Importar backup** na tela inicial.
-4. Selecione o arquivo `.json` baixado e digite a senha que você colocou em
-   `IMPORT_SECRET`.
-5. Clique em **Importar** — a tela mostra quantos perfis, laudos e
-   resultados foram importados.
-6. **Depois de importar, remova a variável `IMPORT_SECRET`** (ou troque o
-   valor) — essa rota aceita qualquer JSON no formato certo e escreve
-   direto no banco, então não vale a pena deixá-la disponível
-   indefinidamente.
+2. Abra o site já publicado e clique em **Importar backup** na tela inicial.
+3. Selecione o arquivo `.json` baixado e clique em **Importar**.
+4. A tela mostra quantos perfis, laudos e resultados foram importados.
 
-Se preferir automatizar por linha de comando em vez de usar o botão, a
-mesma rota aceita uma chamada `curl`:
-```bash
-curl -X POST https://SEU-APP.up.railway.app/api/import \
-  -H "Content-Type: application/json" \
-  -H "x-import-secret: SUA_SENHA" \
-  --data @backup-exames-AAAA-MM-DD.json
-```
+**Atenção:** essa rota (`/api/import`) não pede senha nem autenticação —
+qualquer pessoa com a URL do seu site consegue usá-la para inserir dados no
+seu banco. Isso é consistente com o restante do app (que também não tem
+login), mas vale saber antes de divulgar o link amplamente.
 
 ## Avisos importantes
 

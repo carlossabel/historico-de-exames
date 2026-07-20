@@ -205,7 +205,6 @@ function ConfirmModal({ title, message, confirmLabel, onCancel, onConfirm }) {
 
 function ImportModal({ onClose, onDone }) {
   const [file, setFile] = useState(null);
-  const [secret, setSecret] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
@@ -222,7 +221,7 @@ function ImportModal({ onClose, onDone }) {
       } catch (e) {
         throw new Error("Esse arquivo não é um JSON válido de backup.");
       }
-      const data = await api.importBackup(secret, parsed);
+      const data = await api.importBackup(parsed);
       setResult(data);
       await onDone();
     } catch (e) {
@@ -237,8 +236,7 @@ function ImportModal({ onClose, onDone }) {
       {!result ? (
         <>
           <p className="text-xs text-slate-500 mb-4">
-            Selecione o arquivo <code>backup-exames-....json</code> exportado do artefato do Claude, e informe a senha de importação
-            (definida na variável <code>IMPORT_SECRET</code> do servidor).
+            Selecione o arquivo <code>backup-exames-....json</code> exportado do artefato do Claude. Os perfis e exames dele serão adicionados aos que já existem aqui.
           </p>
           <label className="text-xs text-slate-500 mb-1 block">Arquivo de backup</label>
           <input
@@ -246,14 +244,6 @@ function ImportModal({ onClose, onDone }) {
             accept="application/json,.json"
             onChange={(e) => setFile(e.target.files?.[0] || null)}
             className="w-full text-sm mb-4 border border-slate-300 rounded-lg px-2.5 py-1.5"
-          />
-          <label className="text-xs text-slate-500 mb-1 block">Senha de importação</label>
-          <input
-            type="password"
-            value={secret}
-            onChange={(e) => setSecret(e.target.value)}
-            placeholder="Valor de IMPORT_SECRET"
-            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-300"
           />
           {error && (
             <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
@@ -264,7 +254,7 @@ function ImportModal({ onClose, onDone }) {
             <button onClick={onClose} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
             <button
               onClick={handleImport}
-              disabled={loading || !file || !secret}
+              disabled={loading || !file}
               className="flex items-center gap-1.5 text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
             >
               {loading && <Loader2 size={14} className="animate-spin" />}
@@ -277,10 +267,6 @@ function ImportModal({ onClose, onDone }) {
           <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5 mb-4 text-sm">
             <CheckCircle2 size={16} className="shrink-0" />
             Importado: {result.importedProfiles} perfil(is), {result.importedBatches} laudo(s), {result.importedResults} resultado(s).
-          </div>
-          <div className="flex items-start gap-2 text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2 mb-4">
-            <Info size={13} className="mt-0.5 shrink-0" />
-            Por segurança, remova ou troque a variável <code>IMPORT_SECRET</code> no Railway agora que já importou os dados.
           </div>
           <div className="flex justify-end">
             <button onClick={onClose} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800">Fechar</button>

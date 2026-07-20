@@ -58,10 +58,10 @@ export function pdfUrl(profileId, batchId) {
   return `/api/profiles/${profileId}/batches/${batchId}/pdf`;
 }
 
-export async function importBackup(secret, backupData) {
+export async function importBackup(backupData) {
   const r = await fetch("/api/import", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-import-secret": secret },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(backupData),
   });
   const data = await r.json();

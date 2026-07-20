@@ -176,13 +176,6 @@ app.post("/api/tips", async (req, res) => {
 // ---------- Import backup ----------
 app.post("/api/import", (req, res) => {
   try {
-    const secret = process.env.IMPORT_SECRET;
-    if (!secret) {
-      return res.status(403).json({ error: "Defina a variável de ambiente IMPORT_SECRET no servidor antes de usar essa rota." });
-    }
-    if (req.headers["x-import-secret"] !== secret) {
-      return res.status(401).json({ error: "Chave de importação inválida." });
-    }
     const { profiles, batches } = req.body || {};
     if (!Array.isArray(profiles)) return res.status(400).json({ error: "Formato de backup inválido." });
 
