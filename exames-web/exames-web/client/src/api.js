@@ -58,6 +58,13 @@ export function pdfUrl(profileId, batchId) {
   return `/api/profiles/${profileId}/batches/${batchId}/pdf`;
 }
 
+export async function exportBackup() {
+  const r = await fetch("/api/export");
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao exportar backup");
+  return data;
+}
+
 export async function importBackup(backupData) {
   const r = await fetch("/api/import", {
     method: "POST",

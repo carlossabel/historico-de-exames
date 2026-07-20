@@ -3,7 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
-  FileUp,
+  FileUp, Download,
 } from "lucide-react";
 import * as api from "./api.js";
 
@@ -23,6 +23,23 @@ const PROFILE_COLORS = [
   { bg: "bg-indigo-100", text: "text-indigo-700" },
   { bg: "bg-rose-100", text: "text-rose-700" },
 ];
+
+function downloadJson(filename, obj) {
+  try {
+    const blob = new Blob([JSON.stringify(obj)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
 
 function uid() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -101,6 +118,27 @@ export default function App() {
 
 function HomeScreen({ profiles, onOpen, onAdd, onRemove, onImport }) {
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportMsg, setExportMsg] = useState(null);
+
+  const handleExport = async () => {
+    setExporting(true);
+    setExportMsg(null);
+    try {
+      const backup = await api.exportBackup();
+      const ok = downloadJson(`backup-exames-${new Date().toISOString().slice(0, 10)}.json`, backup);
+      setExportMsg(
+        ok
+          ? "Backup baixado — procure o arquivo na pasta de Downloads padrão do seu navegador (o nome começa com \"backup-exames-\")."
+          : "Não consegui iniciar o download. Tente novamente ou use outro navegador."
+      );
+    } catch (e) {
+      setExportMsg("Não consegui gerar o backup agora. Tente novamente.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
@@ -112,11 +150,23 @@ function HomeScreen({ profiles, onOpen, onAdd, onRemove, onImport }) {
           <button onClick={onImport} className="flex items-center gap-1.5 border border-slate-300 text-slate-700 text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-50">
             <FileUp size={15} /> Importar backup
           </button>
+          {profiles.length > 0 && (
+            <button onClick={handleExport} disabled={exporting} className="flex items-center gap-1.5 border border-slate-300 text-slate-700 text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">
+              {exporting ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+              {exporting ? "Gerando..." : "Exportar backup"}
+            </button>
+          )}
           <button onClick={onAdd} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800 active:scale-95 transition">
             <Plus size={16} /> Novo perfil
           </button>
         </div>
       </div>
+
+      {exportMsg && (
+        <div className="mb-4 flex items-start gap-2 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          <Info size={13} className="mt-0.5 shrink-0" /> {exportMsg}
+        </div>
+      )}
 
       {profiles.length === 0 ? (
         <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
