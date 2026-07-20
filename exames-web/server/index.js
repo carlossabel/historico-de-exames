@@ -11,7 +11,7 @@ import { callClaude, parseExamJson, extractJsonBlock, EXTRACTION_PROMPT } from "
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "60mb" }));
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
 
@@ -271,6 +271,18 @@ if (fs.existsSync(clientDist)) {
 }
 
 const PORT = process.env.PORT || 3000;
+
+// ---------- Error handler (always return JSON, never HTML) ----------
+app.use((err, req, res, next) => {
+  if (err && (err.type === "entity.too.large" || err.status === 413)) {
+    return res.status(413).json({
+      error: "O arquivo enviado é grande demais para importar de uma vez. Se o backup tem muitos PDFs, tente importar os perfis em grupos menores.",
+    });
+  }
+  console.error("Erro não tratado:", err);
+  res.status(500).json({ error: "Erro interno do servidor." });
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   if (!process.env.ANTHROPIC_API_KEY) {
