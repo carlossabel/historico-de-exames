@@ -3,12 +3,12 @@
 Sistema web para guardar o histórico de exames laboratoriais de várias pessoas
 (perfis), com leitura automática de PDF via IA, alerta visual (ideal / atenção
 / fora do ideal), score de saúde, gráfico de evolução, sugestões de novos
-exames via IA, dicas gerais, acompanhamento de composição corporal (peso,
-IMC, % de gordura, massa muscular etc. — manual ou por foto da balança/app,
-com leitura automática via IA), registro de sintomas e de atividades
-físicas (manual, ou sincronizado automaticamente do Strava e do Apple
-Watch), tudo cruzado pela IA nas dicas e sugestões, com histórico de
-evolução de cada indicador.
+exames via IA, dicas gerais, acompanhamento de saúde física (peso, IMC, %
+de gordura, massa muscular, pressão arterial, frequência cardíaca etc. —
+manual ou por foto da balança/aparelho/app, com leitura automática via IA),
+registro de sintomas e de atividades físicas (manual, ou sincronizado
+automaticamente do Strava e do Apple Watch), tudo cruzado pela IA nas dicas
+e sugestões, com histórico de evolução de cada indicador.
 
 Stack: backend em Node + Express + SQLite (`better-sqlite3`), frontend em
 React + Vite. Um único container serve os dois.
@@ -65,14 +65,16 @@ variáveis de ambiente da hospedagem, nunca no código ou no frontend.
 
 ## Integrações de composição corporal e atividade física
 
-### Balança Xiaomi (ou qualquer balança/app) — por foto
+### Balança Xiaomi, aparelho de pressão, smartwatch — por foto
 
-Não existe API pública da Xiaomi pra puxar os dados direto. O caminho é
-simples: na aba "Composição corporal" de um perfil, clique em **Enviar
-foto** e tire uma foto da tela do app da balança (Mi Fit/Zepp, Mi Body
-Composition Scale etc.) ou do próprio visor da balança. A IA lê os valores
-visíveis (peso, % gordura, massa muscular, etc.) e abre uma tela de revisão
-antes de salvar — igual à extração de PDF de exames.
+Não existe API pública da Xiaomi (ou da maioria dos aparelhos de pressão)
+pra puxar os dados direto. O caminho é simples: na aba "Saúde física" de
+um perfil, clique em **Enviar foto** e tire uma foto da tela do app da
+balança (Mi Fit/Zepp, Mi Body Composition Scale etc.), do aparelho de
+pressão arterial, ou do app de saúde do smartwatch. A IA lê os valores
+visíveis (peso, % gordura, massa muscular, pressão arterial, frequência
+cardíaca etc.) e abre uma tela de revisão antes de salvar — igual à
+extração de PDF de exames.
 
 ### Strava (sincronização automática)
 

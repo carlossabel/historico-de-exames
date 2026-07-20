@@ -80,6 +80,9 @@ const BODY_INDICATORS = [
   { key: "bodyWaterPct", label: "Água corporal", unit: "%", decimals: 1 },
   { key: "bmrKcal", label: "Taxa metabólica basal", unit: "kcal", decimals: 0 },
   { key: "heightCm", label: "Altura", unit: "cm", decimals: 1 },
+  { key: "systolicBp", label: "Pressão sistólica", unit: "mmHg", decimals: 0 },
+  { key: "diastolicBp", label: "Pressão diastólica", unit: "mmHg", decimals: 0 },
+  { key: "restingHeartRate", label: "Frequência cardíaca", unit: "bpm", decimals: 0 },
 ];
 
 function withImc(entries) {
@@ -432,6 +435,7 @@ function ProfileScreen({ profile, onBack, initialTab }) {
       setReviewData({
         date: parsed.d || new Date().toISOString().slice(0, 10),
         lab: parsed.l || "",
+        doctor: parsed.m || "",
         results,
         base64: parsed.base64,
         fileName: parsed.fileName,
@@ -450,11 +454,11 @@ function ProfileScreen({ profile, onBack, initialTab }) {
 
   const saveBatch = async (data) => {
     const { batchId } = await api.saveBatch(profile.id, {
-      date: data.date, lab: data.lab, results: data.results, base64: data.base64, fileName: data.fileName, hash: data.hash,
+      date: data.date, lab: data.lab, doctor: data.doctor, results: data.results, base64: data.base64, fileName: data.fileName, hash: data.hash,
     });
-    const newIndexEntry = { batchId, date: data.date, lab: data.lab, count: data.results.length, hash: data.hash };
+    const newIndexEntry = { batchId, date: data.date, lab: data.lab, doctor: data.doctor, count: data.results.length, hash: data.hash };
     setIndex((prev) => [...(prev || []), newIndexEntry].sort((a, b) => (b.date || "").localeCompare(a.date || "")));
-    setBatches((prev) => ({ ...prev, [batchId]: { date: data.date, lab: data.lab, results: data.results } }));
+    setBatches((prev) => ({ ...prev, [batchId]: { date: data.date, lab: data.lab, doctor: data.doctor, results: data.results } }));
     setReviewData(null);
     refreshAlerts();
   };
@@ -528,7 +532,7 @@ function ProfileScreen({ profile, onBack, initialTab }) {
           onClick={() => setTab("corpo")}
           className={`text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "corpo" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
         >
-          Composição corporal
+          Saúde física
         </button>
         <button
           onClick={() => setTab("sintomas")}
@@ -566,7 +570,7 @@ function ProfileScreen({ profile, onBack, initialTab }) {
           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
           <div className="flex-1">{uploadError}</div>
           {!uploadError.startsWith("Esse arquivo já foi importado") && (
-            <button onClick={() => setReviewData({ date: new Date().toISOString().slice(0, 10), lab: "", results: [], base64: null })} className="text-xs underline whitespace-nowrap">
+            <button onClick={() => setReviewData({ date: new Date().toISOString().slice(0, 10), lab: "", doctor: "", results: [], base64: null })} className="text-xs underline whitespace-nowrap">
               Adicionar manualmente
             </button>
           )}
@@ -576,7 +580,11 @@ function ProfileScreen({ profile, onBack, initialTab }) {
       {latestBatch && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
           <ScoreCard score={latestScore} trend={trend} />
-          <CountCard label="Última coleta" value={fmtDate(latestBatch.date)} sub={latestBatch.lab || "Laboratório não informado"} />
+          <CountCard
+            label="Última coleta"
+            value={fmtDate(latestBatch.date)}
+            sub={[latestBatch.lab, latestBatch.doctor ? `Dr(a). ${latestBatch.doctor}` : null].filter(Boolean).join(" · ") || "Laboratório não informado"}
+          />
           <TipsCard onOpen={() => setTipsOpen(true)} hasSuggestions={hasSuggestions} />
         </div>
       )}
@@ -730,7 +738,9 @@ function BatchHistory({ index, profileId, onDelete }) {
             <div className="flex items-center gap-2.5 min-w-0">
               <FileText size={15} className="text-slate-400 shrink-0" />
               <span className="text-sm text-slate-800">{fmtDate(b.date)}</span>
-              <span className="text-xs text-slate-400 truncate">{b.lab || "Lab não informado"} · {b.count} exames</span>
+              <span className="text-xs text-slate-400 truncate">
+                {b.lab || "Lab não informado"}{b.doctor ? ` · Dr(a). ${b.doctor}` : ""} · {b.count} exames
+              </span>
             </div>
             <div className="flex items-center gap-1 shrink-0">
               <a href={api.pdfUrl(profileId, b.batchId)} target="_blank" rel="noreferrer" className="text-slate-400 hover:text-slate-700 p-1.5 inline-flex" aria-label="Abrir PDF original">
@@ -815,6 +825,7 @@ function ExamEvolutionModal({ examName, orderedBatchIds, batches, onClose }) {
 function ReviewModal({ data, onCancel, onConfirm }) {
   const [date, setDate] = useState(data.date || "");
   const [lab, setLab] = useState(data.lab || "");
+  const [doctor, setDoctor] = useState(data.doctor || "");
   const [results, setResults] = useState(data.results || []);
 
   const updateRow = (id, field, value) => setResults((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
@@ -826,7 +837,7 @@ function ReviewModal({ data, onCancel, onConfirm }) {
       <p className="text-xs text-slate-500 mb-3 flex items-center gap-1.5">
         <ClipboardEdit size={13} /> Revise e corrija antes de salvar — a leitura automática pode errar.
       </p>
-      <div className="grid grid-cols-2 gap-3 mb-4">
+      <div className="grid grid-cols-3 gap-3 mb-4">
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Data da coleta</label>
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
@@ -834,6 +845,10 @@ function ReviewModal({ data, onCancel, onConfirm }) {
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Laboratório</label>
           <input value={lab} onChange={(e) => setLab(e.target.value)} placeholder="Opcional" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Médico</label>
+          <input value={doctor} onChange={(e) => setDoctor(e.target.value)} placeholder="Opcional" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
         </div>
       </div>
 
@@ -879,7 +894,7 @@ function ReviewModal({ data, onCancel, onConfirm }) {
         <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
         <button
           disabled={!date || results.length === 0}
-          onClick={() => onConfirm({ date, lab, results, base64: data.base64, fileName: data.fileName, hash: data.hash })}
+          onClick={() => onConfirm({ date, lab, doctor, results, base64: data.base64, fileName: data.fileName, hash: data.hash })}
           className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
         >
           Salvar no histórico
@@ -1155,7 +1170,7 @@ function BodyCompositionScreen({ profileId }) {
         throw new Error("Essa imagem passa de 8MB — tente uma foto menor.");
       }
       const extracted = await api.extractBodyPhoto(profileId, file);
-      const anyValue = ["weightKg", "heightCm", "bodyFatPct", "muscleMassKg", "visceralFat", "boneMassKg", "bodyWaterPct", "bmrKcal"]
+      const anyValue = ["weightKg", "heightCm", "bodyFatPct", "muscleMassKg", "visceralFat", "boneMassKg", "bodyWaterPct", "bmrKcal", "systolicBp", "diastolicBp", "restingHeartRate"]
         .some((k) => extracted[k] !== null && extracted[k] !== undefined);
       if (!anyValue) {
         throw new Error("Não consegui ler nenhum valor legível nessa foto. Tente uma foto mais nítida ou adicione manualmente.");
@@ -1171,6 +1186,9 @@ function BodyCompositionScreen({ profileId }) {
         boneMassKg: extracted.boneMassKg ?? "",
         bodyWaterPct: extracted.bodyWaterPct ?? "",
         bmrKcal: extracted.bmrKcal ?? "",
+        systolicBp: extracted.systolicBp ?? "",
+        diastolicBp: extracted.diastolicBp ?? "",
+        restingHeartRate: extracted.restingHeartRate ?? "",
         notes: "",
         fromPhoto: true,
       });
@@ -1241,11 +1259,11 @@ function BodyCompositionScreen({ profileId }) {
       {entries.length === 0 ? (
         <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
           <Weight size={28} className="mx-auto mb-2" />
-          <p className="text-sm">Nenhuma medição ainda. Registre peso, % de gordura, massa muscular etc. da última pesagem.</p>
+          <p className="text-sm">Nenhuma medição ainda. Registre peso, % de gordura, massa muscular, pressão arterial, frequência cardíaca etc.</p>
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
             {summaryKeys.map((key) => {
               const meta = BODY_INDICATORS.find((i) => i.key === key);
               const value = latest ? latest[key] : null;
@@ -1272,6 +1290,31 @@ function BodyCompositionScreen({ profileId }) {
                 </button>
               );
             })}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 mb-6">
+            <button
+              onClick={() => setSelectedIndicator("systolicBp")}
+              className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${["systolicBp", "diastolicBp"].includes(selectedIndicator) ? "ring-2 ring-slate-300" : ""}`}
+            >
+              <p className="text-xs text-slate-500 mb-1">Pressão arterial</p>
+              <div className="flex items-end gap-1.5">
+                <span className="text-xl font-medium text-slate-900">
+                  {latest?.systolicBp != null && latest?.diastolicBp != null ? `${fmtNum(latest.systolicBp, 0)}/${fmtNum(latest.diastolicBp, 0)}` : "—"}
+                </span>
+                <span className="text-xs text-slate-400 mb-0.5">mmHg</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedIndicator("restingHeartRate")}
+              className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "restingHeartRate" ? "ring-2 ring-slate-300" : ""}`}
+            >
+              <p className="text-xs text-slate-500 mb-1">Frequência cardíaca</p>
+              <div className="flex items-end gap-1.5">
+                <span className="text-xl font-medium text-slate-900">{fmtNum(latest?.restingHeartRate, 0)}</span>
+                <span className="text-xs text-slate-400 mb-0.5">bpm</span>
+              </div>
+            </button>
           </div>
 
           <div className="border border-slate-200 rounded-xl p-4 mb-6">
@@ -1301,6 +1344,10 @@ function BodyCompositionScreen({ profileId }) {
                   {e.imc !== null && <span className="text-xs text-slate-400">IMC {fmtNum(e.imc, 1)}</span>}
                   {e.bodyFatPct !== null && <span className="text-xs text-slate-400">{fmtNum(e.bodyFatPct, 1)}% gordura</span>}
                   {e.muscleMassKg !== null && <span className="text-xs text-slate-400">{fmtNum(e.muscleMassKg, 1)} kg músculo</span>}
+                  {e.systolicBp !== null && e.diastolicBp !== null && (
+                    <span className="text-xs text-slate-400">{fmtNum(e.systolicBp, 0)}/{fmtNum(e.diastolicBp, 0)} mmHg</span>
+                  )}
+                  {e.restingHeartRate !== null && <span className="text-xs text-slate-400">{fmtNum(e.restingHeartRate, 0)} bpm</span>}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button onClick={() => setFormEntry(e)} className="text-slate-300 hover:text-slate-700 p-1.5" aria-label="Editar medição">
@@ -1365,6 +1412,9 @@ const BODY_FORM_FIELDS = [
   { key: "boneMassKg", label: "Massa óssea (kg)", step: "0.01" },
   { key: "bodyWaterPct", label: "Água corporal (%)", step: "0.1" },
   { key: "bmrKcal", label: "Taxa metabólica basal (kcal)", step: "1" },
+  { key: "systolicBp", label: "Pressão sistólica (mmHg)", step: "1" },
+  { key: "diastolicBp", label: "Pressão diastólica (mmHg)", step: "1" },
+  { key: "restingHeartRate", label: "Frequência cardíaca (bpm)", step: "1" },
 ];
 
 function BodyEntryModal({ entry, onCancel, onSave }) {
@@ -1378,6 +1428,9 @@ function BodyEntryModal({ entry, onCancel, onSave }) {
     boneMassKg: entry.boneMassKg ?? "",
     bodyWaterPct: entry.bodyWaterPct ?? "",
     bmrKcal: entry.bmrKcal ?? "",
+    systolicBp: entry.systolicBp ?? "",
+    diastolicBp: entry.diastolicBp ?? "",
+    restingHeartRate: entry.restingHeartRate ?? "",
     notes: entry.notes || "",
   });
   const [saving, setSaving] = useState(false);
@@ -2049,7 +2102,7 @@ function VitalRings({ scorePct, activityPct, consistencyPct }) {
           </g>
         );
       })}
-      <text x="100" y="94" textAnchor="middle" fill="white" fontSize="40" fontFamily='"Fraunces", serif' fontStyle="italic" fontWeight="500">
+      <text x="100" y="94" textAnchor="middle" fill="white" fontSize="36" fontWeight="600">
         {scorePct !== null ? scorePct : "—"}
       </text>
       <text x="100" y="118" textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize="10" letterSpacing="1.5" style={{ textTransform: "uppercase" }}>
@@ -2183,7 +2236,7 @@ function DashboardScreen({ profileId, profileName, onOpenTips, onGoTo }) {
         <VitalRings scorePct={latestScore} activityPct={activityPct} consistencyPct={consistencyPct} />
         <div className="text-center sm:text-left">
           <p className="text-teal-300 text-xs uppercase tracking-[0.2em] mb-2">Painel de {profileName}</p>
-          <p className="text-white text-lg sm:text-xl leading-snug mb-4" style={{ fontFamily: '"Fraunces", serif' }}>
+          <p className="text-white text-lg sm:text-xl leading-snug mb-4">
             {headline}
           </p>
           <div className="flex flex-wrap justify-center sm:justify-start gap-4 text-xs text-white/70">
@@ -2197,7 +2250,7 @@ function DashboardScreen({ profileId, profileName, onOpenTips, onGoTo }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
         <DashboardCard title="Tendência do score" onClick={() => onGoTo("exames")}>
           <div className="flex items-end gap-2 mb-1">
-            <span className="text-2xl font-medium text-slate-900" style={{ fontFamily: '"Fraunces", serif' }}>{latestScore ?? "—"}</span>
+            <span className="text-2xl font-medium text-slate-900">{latestScore ?? "—"}</span>
             {scoreTrend !== null && scoreTrend !== 0 && (
               <span className={`flex items-center text-xs mb-1 ${scoreTrend > 0 ? "text-emerald-600" : "text-red-600"}`}>
                 {scoreTrend > 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />} {Math.abs(scoreTrend)}
@@ -2207,9 +2260,9 @@ function DashboardScreen({ profileId, profileName, onOpenTips, onGoTo }) {
           <MiniSparkline points={scoreHistory} color="#2dd4bf" />
         </DashboardCard>
 
-        <DashboardCard title="Composição corporal" onClick={() => onGoTo("corpo")}>
+        <DashboardCard title="Saúde física" onClick={() => onGoTo("corpo")}>
           <div className="flex items-end gap-2 mb-1">
-            <span className="text-2xl font-medium text-slate-900" style={{ fontFamily: '"Fraunces", serif' }}>
+            <span className="text-2xl font-medium text-slate-900">
               {latestBody?.weightKg ?? "—"}<span className="text-sm text-slate-400 ml-1">kg</span>
             </span>
             {weightTrend !== null && weightTrend !== 0 && (
@@ -2223,7 +2276,7 @@ function DashboardScreen({ profileId, profileName, onOpenTips, onGoTo }) {
 
         <DashboardCard title="Atividade da semana" onClick={() => onGoTo("atividades")}>
           <div className="flex items-end gap-2 mb-2">
-            <span className="text-2xl font-medium text-slate-900" style={{ fontFamily: '"Fraunces", serif' }}>{weeklyMinutes}</span>
+            <span className="text-2xl font-medium text-slate-900">{weeklyMinutes}</span>
             <span className="text-sm text-slate-400 mb-1">min</span>
           </div>
           <WeeklyBars days={last7Days} />
@@ -2231,7 +2284,7 @@ function DashboardScreen({ profileId, profileName, onOpenTips, onGoTo }) {
 
         <DashboardCard title="Sintomas ativos" onClick={() => onGoTo("sintomas")}>
           <div className="flex items-end gap-2 mb-2">
-            <span className="text-2xl font-medium text-slate-900" style={{ fontFamily: '"Fraunces", serif' }}>{activeSymptoms.length}</span>
+            <span className="text-2xl font-medium text-slate-900">{activeSymptoms.length}</span>
           </div>
           {activeSymptoms.length === 0 ? (
             <p className="text-xs text-slate-400">Nenhum sintoma ativo</p>

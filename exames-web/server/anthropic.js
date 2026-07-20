@@ -64,10 +64,11 @@ export function parseExamJson(text) {
 export const EXTRACTION_PROMPT = `Você é um assistente que le laudos de exames laboratoriais em PDF (de qualquer laboratório) e extrai os resultados em JSON compacto. Responda APENAS com JSON valido, sem markdown, sem comentarios, sem texto antes ou depois.
 
 Formato exato:
-{"d":"YYYY-MM-DD","l":"nome do laboratorio ou null","e":[{"n":"nome do exame","v":"valor","u":"unidade ou vazio","r":"faixa de referencia como texto","s":"N|A|F","c":"categoria curta"}]}
+{"d":"YYYY-MM-DD","l":"nome do laboratorio ou null","m":"nome do medico solicitante/responsavel ou null","e":[{"n":"nome do exame","v":"valor","u":"unidade ou vazio","r":"faixa de referencia como texto","s":"N|A|F","c":"categoria curta"}]}
 
 Regras:
 - "d" e a data de coleta ou emissao do laudo (formato YYYY-MM-DD). Se nao encontrar, use null.
+- "m" e o nome do medico que solicitou o exame ou e responsavel tecnico pelo laudo, se estiver escrito no documento (ex: "Dr. Fulano de Tal"). Nao inclua CRM/registro, so o nome. Se nao encontrar nenhum nome de medico, use null.
 - "s" (status): "N" se o valor esta dentro da faixa ideal/referencia, "A" se esta no limite/borderline (proximo do limite, ou o laudo already sinaliza atencao), "F" se esta fora da faixa de referencia (alto ou baixo).
 - Inclua TODOS os exames encontrados no laudo, mas seja extremamente conciso: nomes curtos, sem repetir unidades no texto de referencia.
 - "c" categoria curta (ex: Hematologia, Bioquimica, Hormonios, Lipidograma, Vitaminas, Urina, Outro).
@@ -80,7 +81,7 @@ export function buildAlertsPrompt(examHistoryText, bodyHistoryText, symptomsText
 1) Histórico de exames laboratoriais (cada bloco é um laudo, do mais antigo para o mais recente):
 ${examHistoryText || "Nenhum exame laboratorial registrado ainda."}
 
-2) Histórico de composição corporal (peso, IMC, % de gordura, massa muscular etc., do mais antigo para o mais recente):
+2) Histórico de composição corporal e saúde física (peso, IMC, % de gordura, massa muscular, pressão arterial, frequência cardíaca etc., do mais antigo para o mais recente):
 ${bodyHistoryText || "Nenhuma medição de composição corporal registrada ainda."}
 
 3) Sintomas relatados pela pessoa (podem estar ativos ou já resolvidos):
@@ -92,7 +93,7 @@ ${activitiesText || "Nenhuma atividade física registrada."}
 Seu trabalho é CRUZAR essas quatro fontes — por exemplo: um sintoma relatado (ex.: cansaço, queda de cabelo, palpitação) combinado com um exame em atenção/fora do ideal, uma tendência de piora na composição corporal, ou um padrão de atividade física (excesso, ausência total, ou intensidade alta com sintomas associados) é um motivo bem mais forte para sugerir um exame do que qualquer uma das fontes isolada. Use essa combinação para tornar as sugestões mais direcionadas e precisas, mas o resultado continua sendo uma SUGESTÃO DE EXAME, nunca um diagnóstico de doença.
 
 Seu critério deve ser rigoroso e conservador:
-- SÓ sugira um exame novo/complementar se houver um motivo concreto: um resultado fora da faixa (F) que pede confirmação, uma tendência de piora ao longo do tempo (exames ou composição corporal), um sintoma que persiste/agrava e que faz sentido investigar junto com os dados disponíveis, um padrão de atividade física relevante combinado com outros dados, ou uma combinação relevante entre essas fontes.
+- SÓ sugira um exame novo/complementar se houver um motivo concreto: um resultado fora da faixa (F) que pede confirmação, uma tendência de piora ao longo do tempo (exames, composição corporal ou sinais cardiovasculares como pressão arterial e frequência cardíaca), um sintoma que persiste/agrava e que faz sentido investigar junto com os dados disponíveis, um padrão de atividade física relevante combinado com outros dados, ou uma combinação relevante entre essas fontes.
 - NÃO sugira exames "de rotina" genéricos, exames já feitos recentemente sem motivo de repetir, nem sugestões vagas tipo "faça check-up completo". Sintomas ou padrões de atividade isolados, sem nenhum apoio nos dados numéricos e sem persistência, também não bastam sozinhos, a menos que sejam claramente compatíveis com uma investigação específica.
 - Se os dados não justificarem nenhum exame novo agora, retorne temSugestoes:false — isso é o resultado esperado na maioria das vezes, não force sugestões para parecer útil.
 - Cada sugestão precisa citar o dado concreto que a motiva (exame, valor, data, medição corporal, sintoma ou atividade), mas em UMA frase curta (até ~25 palavras) — sem repetir o histórico inteiro.
@@ -111,7 +112,7 @@ export function buildTipsPrompt(examSummaryText, bodyHistoryText, symptomsText, 
 1) Exames alterados ou em atenção nesse laudo:
 ${examSummaryText || "Nenhum exame fora do ideal — todos dentro da normalidade."}
 
-2) Histórico recente de composição corporal (peso, IMC, % de gordura, massa muscular etc.):
+2) Histórico recente de composição corporal e saúde física (peso, IMC, % de gordura, massa muscular, pressão arterial, frequência cardíaca etc.):
 ${bodyHistoryText || "Nenhuma medição de composição corporal registrada ainda."}
 
 3) Sintomas relatados pela pessoa (ativos ou já resolvidos):
@@ -131,13 +132,15 @@ Responda APENAS com JSON válido, sem markdown, sem texto antes ou depois, no fo
 {"resumo":"1-2 frases gerais sobre o quadro, mencionando se sintomas, composição corporal ou atividade física influenciaram","dicas":["dica 1","dica 2", "..."]}`;
 }
 
-export const BODY_PHOTO_EXTRACTION_PROMPT = `Você recebe uma foto de uma balança de bioimpedância ou da tela de um aplicativo de composição corporal (ex: app da Xiaomi/Mi Fit/Zepp, Renpho, Withings, InBody, etc). Extraia os valores visíveis na imagem.
+export const BODY_PHOTO_EXTRACTION_PROMPT = `Você recebe uma foto de uma balança de bioimpedância, de um aparelho de pressão arterial, da tela de um smartwatch, ou do app de saúde/composição corporal de algum desses aparelhos (ex: Mi Fit/Zepp, Renpho, Withings, InBody, Omron, Apple Saúde, etc). Extraia os valores visíveis na imagem.
 
 Responda APENAS com JSON válido, sem markdown, sem comentários, sem texto antes ou depois, no formato exato:
-{"date":"YYYY-MM-DD ou null","weightKg":numero ou null,"heightCm":numero ou null,"bodyFatPct":numero ou null,"muscleMassKg":numero ou null,"visceralFat":numero ou null,"boneMassKg":numero ou null,"bodyWaterPct":numero ou null,"bmrKcal":numero ou null}
+{"date":"YYYY-MM-DD ou null","weightKg":numero ou null,"heightCm":numero ou null,"bodyFatPct":numero ou null,"muscleMassKg":numero ou null,"visceralFat":numero ou null,"boneMassKg":numero ou null,"bodyWaterPct":numero ou null,"bmrKcal":numero ou null,"systolicBp":numero ou null,"diastolicBp":numero ou null,"restingHeartRate":numero ou null}
 
 Regras:
 - Só preencha um campo se o valor estiver claramente legível na imagem. Se não aparecer ou estiver ilegível, use null — NUNCA invente ou estime um valor.
 - "date": use a data mostrada na tela do app, se houver. Se não houver nenhuma data visível, use null (não assuma a data de hoje).
-- Números sempre em kg, cm, %, ou kcal conforme o campo (converta se a imagem mostrar outra unidade, ex: libras para kg).
-- Se a imagem não for de uma balança/app de composição corporal, ou nenhum valor estiver legível, retorne todos os campos como null.`;
+- "systolicBp" e "diastolicBp" são a pressão arterial sistólica e diastólica em mmHg (ex: em "120/80 mmHg", sistólica=120, diastólica=80).
+- "restingHeartRate" é a frequência cardíaca em bpm (batimentos por minuto).
+- Números sempre em kg, cm, %, kcal, mmHg ou bpm conforme o campo (converta se a imagem mostrar outra unidade, ex: libras para kg).
+- Se a imagem não for de nenhum desses aparelhos/apps, ou nenhum valor estiver legível, retorne todos os campos como null.`;

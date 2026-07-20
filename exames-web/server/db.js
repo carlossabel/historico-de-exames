@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS batches (
   profile_id TEXT NOT NULL,
   date TEXT,
   lab TEXT,
+  doctor TEXT,
   file_hash TEXT,
   pdf_filename TEXT,
   has_pdf INTEGER NOT NULL DEFAULT 0,
@@ -60,6 +61,9 @@ CREATE TABLE IF NOT EXISTS body_entries (
   bone_mass_kg REAL,
   body_water_pct REAL,
   bmr_kcal REAL,
+  systolic_bp REAL,
+  diastolic_bp REAL,
+  resting_heart_rate REAL,
   notes TEXT,
   saved_at INTEGER NOT NULL
 );
@@ -134,6 +138,22 @@ if (!activitiesCols.includes("external_id")) {
 db.exec(
   "CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_source_external ON activities(profile_id, source, external_id) WHERE external_id IS NOT NULL"
 );
+
+const batchesCols = db.prepare("PRAGMA table_info(batches)").all().map((c) => c.name);
+if (!batchesCols.includes("doctor")) {
+  db.exec("ALTER TABLE batches ADD COLUMN doctor TEXT");
+}
+
+const bodyEntriesCols = db.prepare("PRAGMA table_info(body_entries)").all().map((c) => c.name);
+if (!bodyEntriesCols.includes("systolic_bp")) {
+  db.exec("ALTER TABLE body_entries ADD COLUMN systolic_bp REAL");
+}
+if (!bodyEntriesCols.includes("diastolic_bp")) {
+  db.exec("ALTER TABLE body_entries ADD COLUMN diastolic_bp REAL");
+}
+if (!bodyEntriesCols.includes("resting_heart_rate")) {
+  db.exec("ALTER TABLE body_entries ADD COLUMN resting_heart_rate REAL");
+}
 
 // Migração leve: bancos criados antes dos sintomas/composição corporal só tinham
 // based_on_batch_id na tabela alerts. Adiciona a coluna de assinatura combinada

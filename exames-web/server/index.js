@@ -64,7 +64,7 @@ app.get("/api/profiles/:profileId/batches", (req, res) => {
   const { profileId } = req.params;
   const rows = db
     .prepare(
-      "SELECT id as batchId, date, lab, file_hash as hash, has_pdf as hasPdf, pdf_filename as fileName, saved_at as savedAt FROM batches WHERE profile_id = ? ORDER BY date DESC"
+      "SELECT id as batchId, date, lab, doctor, file_hash as hash, has_pdf as hasPdf, pdf_filename as fileName, saved_at as savedAt FROM batches WHERE profile_id = ? ORDER BY date DESC"
     )
     .all(profileId);
   res.json(rows);
@@ -72,7 +72,7 @@ app.get("/api/profiles/:profileId/batches", (req, res) => {
 
 app.get("/api/profiles/:profileId/batches/:batchId", (req, res) => {
   const { batchId } = req.params;
-  const batch = db.prepare("SELECT id, date, lab FROM batches WHERE id = ?").get(batchId);
+  const batch = db.prepare("SELECT id, date, lab, doctor FROM batches WHERE id = ?").get(batchId);
   if (!batch) return res.status(404).json({ error: "Não encontrado" });
   const results = db.prepare("SELECT id, name, value, unit, ref, status, category FROM results WHERE batch_id = ?").all(batchId);
   res.json({ ...batch, results });
@@ -110,6 +110,9 @@ function rowToBodyEntry(r) {
     boneMassKg: r.bone_mass_kg,
     bodyWaterPct: r.body_water_pct,
     bmrKcal: r.bmr_kcal,
+    systolicBp: r.systolic_bp,
+    diastolicBp: r.diastolic_bp,
+    restingHeartRate: r.resting_heart_rate,
     notes: r.notes,
     savedAt: r.saved_at,
   };
@@ -137,12 +140,13 @@ app.post("/api/profiles/:profileId/body-entries", (req, res) => {
     const id = uid();
     db.prepare(
       `INSERT INTO body_entries
-        (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, notes, saved_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, systolic_bp, diastolic_bp, resting_heart_rate, notes, saved_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).run(
       id, profileId, b.date,
       numOrNull(b.weightKg), numOrNull(b.heightCm), numOrNull(b.bodyFatPct), numOrNull(b.muscleMassKg),
       numOrNull(b.visceralFat), numOrNull(b.boneMassKg), numOrNull(b.bodyWaterPct), numOrNull(b.bmrKcal),
+      numOrNull(b.systolicBp), numOrNull(b.diastolicBp), numOrNull(b.restingHeartRate),
       b.notes || "", Date.now()
     );
     const row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(id);
@@ -160,11 +164,12 @@ app.put("/api/profiles/:profileId/body-entries/:entryId", (req, res) => {
     if (!existing) return res.status(404).json({ error: "Medição não encontrada" });
     if (!b.date) return res.status(400).json({ error: "Data da medição é obrigatória" });
     db.prepare(
-      `UPDATE body_entries SET date=?, weight_kg=?, height_cm=?, body_fat_pct=?, muscle_mass_kg=?, visceral_fat=?, bone_mass_kg=?, body_water_pct=?, bmr_kcal=?, notes=? WHERE id=?`
+      `UPDATE body_entries SET date=?, weight_kg=?, height_cm=?, body_fat_pct=?, muscle_mass_kg=?, visceral_fat=?, bone_mass_kg=?, body_water_pct=?, bmr_kcal=?, systolic_bp=?, diastolic_bp=?, resting_heart_rate=?, notes=? WHERE id=?`
     ).run(
       b.date,
       numOrNull(b.weightKg), numOrNull(b.heightCm), numOrNull(b.bodyFatPct), numOrNull(b.muscleMassKg),
       numOrNull(b.visceralFat), numOrNull(b.boneMassKg), numOrNull(b.bodyWaterPct), numOrNull(b.bmrKcal),
+      numOrNull(b.systolicBp), numOrNull(b.diastolicBp), numOrNull(b.restingHeartRate),
       b.notes || "", entryId
     );
     const row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(entryId);
@@ -491,7 +496,7 @@ app.post("/api/extract", upload.single("file"), async (req, res) => {
 app.post("/api/profiles/:profileId/batches", (req, res) => {
   try {
     const { profileId } = req.params;
-    const { date, lab, results, base64, fileName, hash } = req.body || {};
+    const { date, lab, doctor, results, base64, fileName, hash } = req.body || {};
     if (!Array.isArray(results) || results.length === 0) {
       return res.status(400).json({ error: "Nenhum resultado para salvar" });
     }
@@ -504,8 +509,8 @@ app.post("/api/profiles/:profileId/batches", (req, res) => {
       } catch (e) {}
     }
     db.prepare(
-      "INSERT INTO batches (id, profile_id, date, lab, file_hash, pdf_filename, has_pdf, saved_at) VALUES (?,?,?,?,?,?,?,?)"
-    ).run(batchId, profileId, date || null, lab || "", hash || null, fileName || "exame.pdf", hasPdf, Date.now());
+      "INSERT INTO batches (id, profile_id, date, lab, doctor, file_hash, pdf_filename, has_pdf, saved_at) VALUES (?,?,?,?,?,?,?,?,?)"
+    ).run(batchId, profileId, date || null, lab || "", doctor || "", hash || null, fileName || "exame.pdf", hasPdf, Date.now());
 
     const insertResult = db.prepare(
       "INSERT INTO results (id, batch_id, name, value, unit, ref, status, category) VALUES (?,?,?,?,?,?,?,?)"
@@ -655,12 +660,16 @@ function buildBodyHistoryText(profileId, maxEntries = 10) {
     ["weight_kg", "peso", "kg"], ["height_cm", "altura", "cm"], ["body_fat_pct", "gordura corporal", "%"],
     ["muscle_mass_kg", "massa muscular", "kg"], ["visceral_fat", "gordura visceral", ""],
     ["bone_mass_kg", "massa óssea", "kg"], ["body_water_pct", "água corporal", "%"], ["bmr_kcal", "TMB", "kcal"],
+    ["resting_heart_rate", "frequência cardíaca de repouso", "bpm"],
   ];
   return recent
     .map((e) => {
       const parts = fieldLabels
         .filter(([col]) => e[col] !== null && e[col] !== undefined)
         .map(([col, label, unit]) => `${label}: ${e[col]}${unit}`);
+      if (e.systolic_bp !== null && e.systolic_bp !== undefined && e.diastolic_bp !== null && e.diastolic_bp !== undefined) {
+        parts.unshift(`pressão arterial: ${e.systolic_bp}/${e.diastolic_bp} mmHg`);
+      }
       return `Medição de ${e.date || "data não informada"}: ${parts.join(", ") || "sem dados"}`;
     })
     .join("\n");
@@ -774,7 +783,7 @@ app.delete("/api/profiles/:profileId/symptoms/:symptomId", (req, res) => {
 app.get("/api/export", (req, res) => {
   try {
     const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, created_at as createdAt FROM profiles").all();
-    const backup = { version: 5, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {} };
+    const backup = { version: 6, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {} };
     for (const p of profiles) {
       const activityRows = db
         .prepare("SELECT * FROM activities WHERE profile_id = ? ORDER BY date ASC, created_at ASC")
@@ -789,7 +798,7 @@ app.get("/api/export", (req, res) => {
         .all(p.id);
       backup.bodyEntries[p.id] = bodyRows.map(rowToBodyEntry);
       const batchRows = db
-        .prepare("SELECT id as batchId, date, lab, file_hash as hash, pdf_filename as fileName FROM batches WHERE profile_id = ?")
+        .prepare("SELECT id as batchId, date, lab, doctor, file_hash as hash, pdf_filename as fileName FROM batches WHERE profile_id = ?")
         .all(p.id);
       const list = [];
       for (const b of batchRows) {
@@ -801,7 +810,7 @@ app.get("/api/export", (req, res) => {
         if (fs.existsSync(pdfPath)) {
           pdfBase64 = fs.readFileSync(pdfPath).toString("base64");
         }
-        list.push({ batchId: b.batchId, date: b.date, lab: b.lab, hash: b.hash, fileName: b.fileName, results, pdfBase64 });
+        list.push({ batchId: b.batchId, date: b.date, lab: b.lab, doctor: b.doctor, hash: b.hash, fileName: b.fileName, results, pdfBase64 });
       }
       backup.batches[p.id] = list;
     }
@@ -852,8 +861,8 @@ app.post("/api/import", (req, res) => {
           } catch (e) {}
         }
         db.prepare(
-          "INSERT INTO batches (id, profile_id, date, lab, file_hash, pdf_filename, has_pdf, saved_at) VALUES (?,?,?,?,?,?,?,?)"
-        ).run(batchId, profileId, b.date || null, b.lab || "", b.hash || null, b.fileName || "exame.pdf", hasPdf, Date.now());
+          "INSERT INTO batches (id, profile_id, date, lab, doctor, file_hash, pdf_filename, has_pdf, saved_at) VALUES (?,?,?,?,?,?,?,?,?)"
+        ).run(batchId, profileId, b.date || null, b.lab || "", b.doctor || "", b.hash || null, b.fileName || "exame.pdf", hasPdf, Date.now());
         importedBatches++;
 
         const insertResult = db.prepare(
@@ -868,12 +877,13 @@ app.post("/api/import", (req, res) => {
       for (const e of bodyList) {
         db.prepare(
           `INSERT INTO body_entries
-            (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, notes, saved_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+            (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, systolic_bp, diastolic_bp, resting_heart_rate, notes, saved_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         ).run(
           uid(), profileId, e.date || null,
           numOrNull(e.weightKg), numOrNull(e.heightCm), numOrNull(e.bodyFatPct), numOrNull(e.muscleMassKg),
           numOrNull(e.visceralFat), numOrNull(e.boneMassKg), numOrNull(e.bodyWaterPct), numOrNull(e.bmrKcal),
+          numOrNull(e.systolicBp), numOrNull(e.diastolicBp), numOrNull(e.restingHeartRate),
           e.notes || "", Date.now()
         );
         importedBodyEntries++;
