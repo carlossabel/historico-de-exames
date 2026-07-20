@@ -101,3 +101,26 @@ Responda APENAS com JSON válido, sem markdown, sem texto antes ou depois, no fo
 
 Responda em português.`;
 }
+
+export function buildTipsPrompt(examSummaryText, bodyHistoryText, symptomsText) {
+  return `Você é um assistente de bem-estar (não substitui um médico e NÃO faz diagnóstico) gerando dicas gerais de estilo de vida para uma pessoa, com base em três fontes de dados combinadas:
+
+1) Exames alterados ou em atenção nesse laudo:
+${examSummaryText || "Nenhum exame fora do ideal — todos dentro da normalidade."}
+
+2) Histórico recente de composição corporal (peso, IMC, % de gordura, massa muscular etc.):
+${bodyHistoryText || "Nenhuma medição de composição corporal registrada ainda."}
+
+3) Sintomas relatados pela pessoa (ativos ou já resolvidos):
+${symptomsText || "Nenhum sintoma relatado."}
+
+Cruze essas três fontes ao montar as dicas — por exemplo, uma tendência de ganho de peso combinada com um exame alterado, ou um sintoma relatado que se conecta a um valor de exame, tornam a dica mais relevante e específica do que olhar cada fonte isoladamente.
+
+Regras:
+- Gere de 3 a 6 dicas práticas de estilo de vida (alimentação, sono, exercício, hidratação, acompanhamento médico) em português.
+- Nunca diagnostique doenças, nunca nomeie uma condição médica como conclusão, nunca cite nomes de medicamentos.
+- Seja direto, sem markdown.
+
+Responda APENAS com JSON válido, sem markdown, sem texto antes ou depois, no formato exato:
+{"resumo":"1-2 frases gerais sobre o quadro, mencionando se sintomas ou composição corporal influenciaram","dicas":["dica 1","dica 2", "..."]}`;
+}

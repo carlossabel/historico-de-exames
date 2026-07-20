@@ -6,7 +6,7 @@ import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import db, { pdfDir } from "./db.js";
-import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt } from "./anthropic.js";
+import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt } from "./anthropic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -243,15 +243,17 @@ app.post("/api/profiles/:profileId/batches", (req, res) => {
 // ---------- Tips ----------
 app.post("/api/tips", async (req, res) => {
   try {
-    const { results } = req.body || {};
+    const { profileId, results } = req.body || {};
     const altered = (results || [])
       .filter((r) => r.status !== "N")
       .map((r) => `${r.name}: ${r.value} ${r.unit} (ref ${r.ref || "n/d"}) - status ${r.status === "F" ? "fora do ideal" : "atenção"}`);
-    const prompt = `Com base nesta lista de exames alterados ou em atenção de uma pessoa:\n${
-      altered.length ? altered.join("\n") : "Nenhum exame fora do ideal — todos dentro da normalidade."
-    }\n\nResponda APENAS com JSON no formato {"resumo":"1-2 frases gerais sobre o quadro","dicas":["dica 1","dica 2", "..."]}. Gere de 3 a 6 dicas práticas de estilo de vida (alimentação, sono, exercício, hidratação, acompanhamento médico) relacionadas aos exames alterados, em português, sem diagnosticar nenhuma doença, sem citar nomes de medicamentos. Seja direto e não use markdown.`;
-    const text = await callClaude([{ role: "user", content: prompt }], 1000);
-    const parsed = JSON.parse(extractJsonBlock(text));
+    const examSummaryText = altered.length ? altered.join("\n") : "";
+    const bodyHistoryText = profileId ? buildBodyHistoryText(profileId, 5) : "";
+    const symptomsText = profileId ? buildSymptomsText(profileId, 15) : "";
+
+    const prompt = buildTipsPrompt(examSummaryText, bodyHistoryText, symptomsText);
+    const text = await callClaude([{ role: "user", content: prompt }], 1200);
+    const parsed = repairJson(text);
     res.json(parsed);
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao gerar dicas" });

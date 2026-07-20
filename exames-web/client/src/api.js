@@ -76,11 +76,11 @@ export async function importBackup(backupData) {
   return data;
 }
 
-export async function getTips(results) {
+export async function getTips(profileId, results) {
   const r = await fetch("/api/tips", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ results }),
+    body: JSON.stringify({ profileId, results }),
   });
   const data = await r.json();
   if (!r.ok) throw new Error(data.error || "Erro ao gerar dicas");

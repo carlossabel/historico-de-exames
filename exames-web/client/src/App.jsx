@@ -852,14 +852,14 @@ function TipsModal({ results, profileId, alertsInfo, onAlertsChange, onClose }) 
   useEffect(() => {
     (async () => {
       try {
-        setTips(await api.getTips(results));
+        setTips(await api.getTips(profileId, results));
       } catch (e) {
         setError("Não consegui gerar as dicas agora. Tente novamente em instantes.");
       } finally {
         setLoading(false);
       }
     })();
-  }, [results]);
+  }, [results, profileId]);
 
   const runAnalyze = async () => {
     setAnalyzing(true);
