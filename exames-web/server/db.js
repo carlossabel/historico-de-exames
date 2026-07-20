@@ -93,6 +93,23 @@ CREATE TABLE IF NOT EXISTS activities (
   distance_km REAL,
   calories_kcal REAL,
   notes TEXT,
+  source TEXT NOT NULL DEFAULT 'manual',
+  external_id TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS strava_tokens (
+  profile_id TEXT PRIMARY KEY,
+  athlete_id TEXT,
+  access_token TEXT,
+  refresh_token TEXT,
+  expires_at INTEGER,
+  connected_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS activity_webhooks (
+  profile_id TEXT PRIMARY KEY,
+  token TEXT UNIQUE NOT NULL,
   created_at INTEGER NOT NULL
 );
 
@@ -103,6 +120,20 @@ CREATE INDEX IF NOT EXISTS idx_symptoms_profile ON symptoms(profile_id);
 CREATE INDEX IF NOT EXISTS idx_tips_history_profile ON tips_history(profile_id);
 CREATE INDEX IF NOT EXISTS idx_activities_profile ON activities(profile_id);
 `);
+
+// Migração leve: bancos criados antes do Strava/Apple Watch só tinham as colunas
+// originais de activities (sem source/external_id). Adiciona se ainda não existirem,
+// e cria o índice único parcial que evita duplicar atividades sincronizadas.
+const activitiesCols = db.prepare("PRAGMA table_info(activities)").all().map((c) => c.name);
+if (!activitiesCols.includes("source")) {
+  db.exec("ALTER TABLE activities ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
+}
+if (!activitiesCols.includes("external_id")) {
+  db.exec("ALTER TABLE activities ADD COLUMN external_id TEXT");
+}
+db.exec(
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_source_external ON activities(profile_id, source, external_id) WHERE external_id IS NOT NULL"
+);
 
 // Migração leve: bancos criados antes dos sintomas/composição corporal só tinham
 // based_on_batch_id na tabela alerts. Adiciona a coluna de assinatura combinada

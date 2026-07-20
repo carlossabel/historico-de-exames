@@ -130,3 +130,14 @@ Regras:
 Responda APENAS com JSON válido, sem markdown, sem texto antes ou depois, no formato exato:
 {"resumo":"1-2 frases gerais sobre o quadro, mencionando se sintomas, composição corporal ou atividade física influenciaram","dicas":["dica 1","dica 2", "..."]}`;
 }
+
+export const BODY_PHOTO_EXTRACTION_PROMPT = `Você recebe uma foto de uma balança de bioimpedância ou da tela de um aplicativo de composição corporal (ex: app da Xiaomi/Mi Fit/Zepp, Renpho, Withings, InBody, etc). Extraia os valores visíveis na imagem.
+
+Responda APENAS com JSON válido, sem markdown, sem comentários, sem texto antes ou depois, no formato exato:
+{"date":"YYYY-MM-DD ou null","weightKg":numero ou null,"heightCm":numero ou null,"bodyFatPct":numero ou null,"muscleMassKg":numero ou null,"visceralFat":numero ou null,"boneMassKg":numero ou null,"bodyWaterPct":numero ou null,"bmrKcal":numero ou null}
+
+Regras:
+- Só preencha um campo se o valor estiver claramente legível na imagem. Se não aparecer ou estiver ilegível, use null — NUNCA invente ou estime um valor.
+- "date": use a data mostrada na tela do app, se houver. Se não houver nenhuma data visível, use null (não assuma a data de hoje).
+- Números sempre em kg, cm, %, ou kcal conforme o campo (converta se a imagem mostrar outra unidade, ex: libras para kg).
+- Se a imagem não for de uma balança/app de composição corporal, ou nenhum valor estiver legível, retorne todos os campos como null.`;

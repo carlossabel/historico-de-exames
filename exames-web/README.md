@@ -4,9 +4,11 @@ Sistema web para guardar o histórico de exames laboratoriais de várias pessoas
 (perfis), com leitura automática de PDF via IA, alerta visual (ideal / atenção
 / fora do ideal), score de saúde, gráfico de evolução, sugestões de novos
 exames via IA, dicas gerais, acompanhamento de composição corporal (peso,
-IMC, % de gordura, massa muscular etc.), registro de sintomas e de
-atividades físicas, tudo cruzado pela IA nas dicas e sugestões, com
-histórico de evolução de cada indicador.
+IMC, % de gordura, massa muscular etc. — manual ou por foto da balança/app,
+com leitura automática via IA), registro de sintomas e de atividades
+físicas (manual, ou sincronizado automaticamente do Strava e do Apple
+Watch), tudo cruzado pela IA nas dicas e sugestões, com histórico de
+evolução de cada indicador.
 
 Stack: backend em Node + Express + SQLite (`better-sqlite3`), frontend em
 React + Vite. Um único container serve os dois.
@@ -60,6 +62,59 @@ funciona do mesmo jeito (Render, Fly.io, um VPS com Docker, etc.).
 
 Você já tem uma — só garanta que ela está no campo `ANTHROPIC_API_KEY` das
 variáveis de ambiente da hospedagem, nunca no código ou no frontend.
+
+## Integrações de composição corporal e atividade física
+
+### Balança Xiaomi (ou qualquer balança/app) — por foto
+
+Não existe API pública da Xiaomi pra puxar os dados direto. O caminho é
+simples: na aba "Composição corporal" de um perfil, clique em **Enviar
+foto** e tire uma foto da tela do app da balança (Mi Fit/Zepp, Mi Body
+Composition Scale etc.) ou do próprio visor da balança. A IA lê os valores
+visíveis (peso, % gordura, massa muscular, etc.) e abre uma tela de revisão
+antes de salvar — igual à extração de PDF de exames.
+
+### Strava (sincronização automática)
+
+Precisa registrar um app gratuito no Strava:
+
+1. Acesse [strava.com/settings/api](https://www.strava.com/settings/api) e
+   crie uma aplicação (qualquer nome/website servem).
+2. Em **Authorization Callback Domain**, coloque só o domínio do seu site
+   publicado, sem `https://` e sem caminho — ex: `seu-app.up.railway.app`.
+3. Copie o **Client ID** e o **Client Secret** gerados.
+4. Nas variáveis de ambiente da hospedagem (Railway → Variables), adicione:
+   - `STRAVA_CLIENT_ID` = o Client ID
+   - `STRAVA_CLIENT_SECRET` = o Client Secret
+5. Reinicie o serviço. Na aba "Atividades" de um perfil, o card do Strava
+   vai mostrar o botão **Conectar com Strava** — clique, autorize no Strava,
+   e você volta pro app já na aba certa. Depois é só clicar em
+   **Sincronizar** quando quiser trazer os treinos novos (não sincroniza
+   sozinho, só quando pedido).
+
+Se sua hospedagem usar um domínio diferente do detectado automaticamente
+(proxies mais exóticos), defina também `STRAVA_REDIRECT_BASE_URL` com a URL
+completa (ex: `https://seu-app.up.railway.app`).
+
+### Apple Watch (via Atalhos do iPhone)
+
+Não existe API de servidor da Apple pra dados de saúde — o caminho é um
+Atalho que roda sozinho depois do treino e manda os dados pro seu app:
+
+1. Na aba "Atividades" de um perfil, copie o link mostrado no card do Apple
+   Watch (é único por perfil — guarda com cuidado, quem tiver o link
+   consegue registrar atividades nesse perfil).
+2. No iPhone, abra o app **Atalhos** → aba **Automação** → **Nova
+   Automação** → **Treino Concluído**.
+3. Adicione uma ação pra pegar os detalhes do treino (duração, distância,
+   calorias) e monte um dicionário com os campos `date`, `activityType`,
+   `durationMin`, `distanceKm`, `caloriesKcal`.
+4. Adicione **Obter Conteúdo de URL**: método `POST`, corpo no formato
+   JSON com esse dicionário, e cole o link copiado como URL.
+5. Desative "Perguntar antes de executar" pra rodar automaticamente.
+
+Se o link vazar ou parar de funcionar, dá pra gerar um novo a qualquer
+momento pelo mesmo card (o antigo para de funcionar).
 
 ## Importar um backup exportado do artefato do Claude
 

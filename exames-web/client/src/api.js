@@ -201,3 +201,42 @@ export async function updateActivity(profileId, activityId, payload) {
 export async function deleteActivity(profileId, activityId) {
   await fetch(`/api/profiles/${profileId}/activities/${activityId}`, { method: "DELETE" });
 }
+
+export async function extractBodyPhoto(profileId, file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const r = await fetch(`/api/profiles/${profileId}/body-entries/extract-photo`, { method: "POST", body: fd });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao ler a imagem");
+  return data;
+}
+
+export async function getStravaStatus(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/strava/status`);
+  return r.json();
+}
+
+export function stravaConnectUrl(profileId) {
+  return `/api/profiles/${profileId}/strava/connect`;
+}
+
+export async function syncStrava(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/strava/sync`, { method: "POST" });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao sincronizar com o Strava");
+  return data;
+}
+
+export async function disconnectStrava(profileId) {
+  await fetch(`/api/profiles/${profileId}/strava/disconnect`, { method: "DELETE" });
+}
+
+export async function getActivityWebhook(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/activity-webhook`);
+  return r.json();
+}
+
+export async function resetActivityWebhook(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/activity-webhook/reset`, { method: "POST" });
+  return r.json();
+}

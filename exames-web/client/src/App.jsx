@@ -3,7 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
-  FileUp, Download, Bell, Weight, Pencil, Stethoscope, Dumbbell,
+  FileUp, Download, Bell, Weight, Pencil, Stethoscope, Dumbbell, Camera, Watch, Link, Copy, RefreshCw,
 } from "lucide-react";
 import * as api from "./api.js";
 
@@ -100,11 +100,28 @@ export default function App() {
   const [screen, setScreen] = useState({ name: "home" });
   const [showAddProfile, setShowAddProfile] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [connectedToast, setConnectedToast] = useState(null);
 
   const refreshProfiles = async () => setProfiles(await api.getProfiles());
 
   useEffect(() => {
     refreshProfiles();
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connectedProfile = params.get("connectedProfile");
+    const provider = params.get("provider");
+    if (connectedProfile) {
+      setScreen({ name: "profile", profileId: connectedProfile, initialTab: "atividades" });
+      setConnectedToast(provider === "strava" ? "Strava conectado com sucesso!" : "Conectado com sucesso!");
+      window.history.replaceState({}, "", window.location.pathname);
+      setTimeout(() => setConnectedToast(null), 6000);
+    } else if (params.get("strava") === "error") {
+      setConnectedToast("Não consegui conectar ao Strava. Tente novamente.");
+      window.history.replaceState({}, "", window.location.pathname);
+      setTimeout(() => setConnectedToast(null), 6000);
+    }
   }, []);
 
   const addProfile = async (name) => {
@@ -130,11 +147,26 @@ export default function App() {
 
   return (
     <div className="w-full max-w-3xl mx-auto px-4 py-8">
+      {connectedToast && (
+        <div className="mb-4 flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5">
+          <CheckCircle2 size={15} className="shrink-0" /> {connectedToast}
+        </div>
+      )}
       {screen.name === "home" && (
         <HomeScreen profiles={profiles} onOpen={(id) => setScreen({ name: "profile", profileId: id })} onAdd={() => setShowAddProfile(true)} onRemove={removeProfile} onImport={() => setShowImport(true)} />
       )}
       {screen.name === "profile" && (
-        <ProfileScreen profile={profiles.find((p) => p.id === screen.profileId)} onBack={() => setScreen({ name: "home" })} />
+        profiles.find((p) => p.id === screen.profileId) ? (
+          <ProfileScreen
+            profile={profiles.find((p) => p.id === screen.profileId)}
+            initialTab={screen.initialTab}
+            onBack={() => setScreen({ name: "home" })}
+          />
+        ) : (
+          <div className="flex items-center justify-center py-20 text-slate-400">
+            <Loader2 className="animate-spin" size={22} />
+          </div>
+        )
       )}
       {showAddProfile && <AddProfileModal onClose={() => setShowAddProfile(false)} onConfirm={addProfile} />}
       {showImport && <ImportModal onClose={() => setShowImport(false)} onDone={refreshProfiles} />}
@@ -353,7 +385,7 @@ function ImportModal({ onClose, onDone }) {
   );
 }
 
-function ProfileScreen({ profile, onBack }) {
+function ProfileScreen({ profile, onBack, initialTab }) {
   const [index, setIndex] = useState(null);
   const [batches, setBatches] = useState({});
   const [uploading, setUploading] = useState(false);
@@ -362,7 +394,7 @@ function ProfileScreen({ profile, onBack }) {
   const [tipsOpen, setTipsOpen] = useState(false);
   const [selectedExam, setSelectedExam] = useState(null);
   const [alertsInfo, setAlertsInfo] = useState(null);
-  const [tab, setTab] = useState("exames");
+  const [tab, setTab] = useState(initialTab || "exames");
   const fileInputRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -1088,6 +1120,9 @@ function BodyCompositionScreen({ profileId }) {
   const [formEntry, setFormEntry] = useState(null); // { ...entry } when editing, {} when adding new, null when closed
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [selectedIndicator, setSelectedIndicator] = useState("weightKg");
+  const [photoLoading, setPhotoLoading] = useState(false);
+  const [photoError, setPhotoError] = useState(null);
+  const photoInputRef = useRef(null);
 
   const load = useCallback(async () => {
     const rows = await api.getBodyEntries(profileId);
@@ -1095,6 +1130,40 @@ function BodyCompositionScreen({ profileId }) {
   }, [profileId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const handlePhoto = async (file) => {
+    setPhotoError(null);
+    setPhotoLoading(true);
+    try {
+      if (file.size > 8 * 1024 * 1024) {
+        throw new Error("Essa imagem passa de 8MB — tente uma foto menor.");
+      }
+      const extracted = await api.extractBodyPhoto(profileId, file);
+      const anyValue = ["weightKg", "heightCm", "bodyFatPct", "muscleMassKg", "visceralFat", "boneMassKg", "bodyWaterPct", "bmrKcal"]
+        .some((k) => extracted[k] !== null && extracted[k] !== undefined);
+      if (!anyValue) {
+        throw new Error("Não consegui ler nenhum valor legível nessa foto. Tente uma foto mais nítida ou adicione manualmente.");
+      }
+      const latestHeight = entries && entries.length ? withImc(entries)[entries.length - 1]?.heightCm : null;
+      setFormEntry({
+        date: extracted.date || new Date().toISOString().slice(0, 10),
+        weightKg: extracted.weightKg ?? "",
+        heightCm: extracted.heightCm ?? (latestHeight ?? ""),
+        bodyFatPct: extracted.bodyFatPct ?? "",
+        muscleMassKg: extracted.muscleMassKg ?? "",
+        visceralFat: extracted.visceralFat ?? "",
+        boneMassKg: extracted.boneMassKg ?? "",
+        bodyWaterPct: extracted.bodyWaterPct ?? "",
+        bmrKcal: extracted.bmrKcal ?? "",
+        notes: "",
+        fromPhoto: true,
+      });
+    } catch (e) {
+      setPhotoError(e.message || "Não consegui ler essa foto. Tente novamente ou adicione manualmente.");
+    } finally {
+      setPhotoLoading(false);
+    }
+  };
 
   const saveEntry = async (payload) => {
     if (payload.id) {
@@ -1124,17 +1193,34 @@ function BodyCompositionScreen({ profileId }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <p className="text-sm text-slate-500">
           {entries.length} mediç{entries.length !== 1 ? "ões" : "ão"} registrada{entries.length !== 1 ? "s" : ""}
         </p>
-        <button
-          onClick={() => setFormEntry({ date: new Date().toISOString().slice(0, 10), heightCm: latest?.heightCm ?? "" })}
-          className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800"
-        >
-          <Plus size={15} /> Nova medição
-        </button>
+        <div className="flex items-center gap-2">
+          <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePhoto(f); e.target.value = ""; }} />
+          <button
+            onClick={() => photoInputRef.current?.click()}
+            disabled={photoLoading}
+            className="flex items-center gap-1.5 border border-slate-300 text-slate-700 text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50"
+          >
+            {photoLoading ? <Loader2 size={15} className="animate-spin" /> : <Camera size={15} />}
+            {photoLoading ? "Lendo foto..." : "Enviar foto"}
+          </button>
+          <button
+            onClick={() => setFormEntry({ date: new Date().toISOString().slice(0, 10), heightCm: latest?.heightCm ?? "" })}
+            className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800"
+          >
+            <Plus size={15} /> Nova medição
+          </button>
+        </div>
       </div>
+
+      {photoError && (
+        <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" /> {photoError}
+        </div>
+      )}
 
       {entries.length === 0 ? (
         <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
@@ -1298,6 +1384,11 @@ function BodyEntryModal({ entry, onCancel, onSave }) {
 
   return (
     <ModalShell onClose={onCancel} title={entry.id ? "Editar medição" : "Nova medição"} wide>
+      {entry.fromPhoto && (
+        <p className="text-xs text-slate-500 mb-3 flex items-center gap-1.5">
+          <ClipboardEdit size={13} /> Revise os valores lidos da foto antes de salvar — a leitura automática pode errar.
+        </p>
+      )}
       <div className="mb-4">
         <label className="text-xs text-slate-500 mb-1 block">Data da medição</label>
         <input
@@ -1615,6 +1706,8 @@ function ActivitiesScreen({ profileId }) {
         </button>
       </div>
 
+      <ActivityIntegrations profileId={profileId} onSynced={load} />
+
       {activities.length > 0 && (
         <div className="grid grid-cols-2 gap-3 mb-6">
           <div className="bg-slate-50 rounded-xl p-4">
@@ -1644,6 +1737,8 @@ function ActivitiesScreen({ profileId }) {
                     <span className="text-sm text-slate-800 font-medium">{fmtDate(a.date)}</span>
                     <span className="text-sm text-slate-700">{a.activityType}</span>
                     {intMeta && <span className={`text-xs px-2 py-0.5 rounded-full ${intMeta.chip}`}>{intMeta.label}</span>}
+                    {a.source === "strava" && <span className="text-xs px-2 py-0.5 rounded-full bg-orange-100 text-orange-700">Strava</span>}
+                    {a.source === "apple_watch" && <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">Apple Watch</span>}
                   </div>
                   <p className="text-xs text-slate-400">
                     {[
@@ -1776,5 +1871,133 @@ function ActivityModal({ entry, onCancel, onSave }) {
         </button>
       </div>
     </ModalShell>
+  );
+}
+
+function ActivityIntegrations({ profileId, onSynced }) {
+  const [stravaStatus, setStravaStatus] = useState(null);
+  const [stravaSyncing, setStravaSyncing] = useState(false);
+  const [stravaError, setStravaError] = useState(null);
+  const [stravaMsg, setStravaMsg] = useState(null);
+
+  const [webhookUrl, setWebhookUrl] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [showInstructions, setShowInstructions] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  useEffect(() => {
+    api.getStravaStatus(profileId).then(setStravaStatus).catch(() => setStravaStatus({ connected: false }));
+    api.getActivityWebhook(profileId).then((d) => setWebhookUrl(d.url)).catch(() => {});
+  }, [profileId]);
+
+  const syncStrava = async () => {
+    setStravaSyncing(true);
+    setStravaError(null);
+    setStravaMsg(null);
+    try {
+      const data = await api.syncStrava(profileId);
+      setStravaMsg(`${data.imported} atividade${data.imported !== 1 ? "s" : ""} nova${data.imported !== 1 ? "s" : ""} importada${data.imported !== 1 ? "s" : ""}.`);
+      await onSynced();
+    } catch (e) {
+      setStravaError(e.message || "Erro ao sincronizar com o Strava.");
+    } finally {
+      setStravaSyncing(false);
+    }
+  };
+
+  const disconnectStrava = async () => {
+    await api.disconnectStrava(profileId);
+    setStravaStatus({ connected: false });
+    setStravaMsg(null);
+  };
+
+  const copyWebhook = async () => {
+    try {
+      await navigator.clipboard.writeText(webhookUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {}
+  };
+
+  const resetWebhook = async () => {
+    const data = await api.resetActivityWebhook(profileId);
+    setWebhookUrl(data.url);
+    setConfirmReset(false);
+  };
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+      {/* Strava */}
+      <div className="border border-slate-200 rounded-xl p-4">
+        <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2">Strava</p>
+        {stravaStatus === null ? (
+          <Loader2 size={16} className="animate-spin text-slate-300" />
+        ) : stravaStatus.connected ? (
+          <div>
+            <p className="text-sm text-emerald-700 flex items-center gap-1.5 mb-2"><CheckCircle2 size={14} /> Conectado</p>
+            <div className="flex items-center gap-3">
+              <button onClick={syncStrava} disabled={stravaSyncing} className="text-sm px-3 py-1.5 rounded-lg bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 flex items-center gap-1.5">
+                {stravaSyncing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                Sincronizar
+              </button>
+              <button onClick={disconnectStrava} className="text-xs text-slate-400 hover:text-red-500 underline">Desconectar</button>
+            </div>
+            {stravaMsg && <p className="text-xs text-slate-500 mt-2">{stravaMsg}</p>}
+            {stravaError && <p className="text-xs text-red-600 mt-2">{stravaError}</p>}
+          </div>
+        ) : (
+          <div>
+            <p className="text-xs text-slate-500 mb-2">Sincronize corridas, pedaladas e outros treinos automaticamente.</p>
+            <a href={api.stravaConnectUrl(profileId)} className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-orange-600 text-white hover:bg-orange-700">
+              <Link size={13} /> Conectar com Strava
+            </a>
+          </div>
+        )}
+      </div>
+
+      {/* Apple Watch */}
+      <div className="border border-slate-200 rounded-xl p-4">
+        <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Watch size={12} /> Apple Watch</p>
+        <p className="text-xs text-slate-500 mb-2">Envie treinos automaticamente com um Atalho do iPhone.</p>
+        {webhookUrl ? (
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <code className="text-xs bg-slate-50 border border-slate-200 rounded px-2 py-1 truncate flex-1">{webhookUrl}</code>
+              <button onClick={copyWebhook} className="text-slate-400 hover:text-slate-700 p-1.5 shrink-0" aria-label="Copiar link">
+                <Copy size={14} />
+              </button>
+            </div>
+            <div className="flex items-center gap-3">
+              <button onClick={() => setShowInstructions((v) => !v)} className="text-xs text-slate-500 hover:text-slate-800 underline">
+                {showInstructions ? "Ocultar instruções" : "Como configurar"}
+              </button>
+              <button onClick={() => setConfirmReset(true)} className="text-xs text-slate-400 hover:text-red-500 underline">Gerar novo link</button>
+            </div>
+            {copied && <p className="text-xs text-emerald-600 mt-1">Link copiado!</p>}
+            {showInstructions && (
+              <ol className="text-xs text-slate-500 mt-2 space-y-1 list-decimal list-inside">
+                <li>No iPhone, abra o app <strong>Atalhos</strong> → aba Automação → Nova Automação → "Treino Concluído".</li>
+                <li>Adicione a ação "Obter Detalhes do Treino" (ou "Detalhes de Saúde") pra pegar duração, distância e calorias.</li>
+                <li>Adicione "Obter Conteúdo de URL": método POST, corpo JSON com os campos <code>date</code>, <code>activityType</code>, <code>durationMin</code>, <code>distanceKm</code>, <code>caloriesKcal</code>.</li>
+                <li>Cole o link acima como a URL da requisição.</li>
+                <li>Desative "Perguntar antes de executar" pra rodar sozinho depois do treino.</li>
+              </ol>
+            )}
+          </div>
+        ) : (
+          <Loader2 size={16} className="animate-spin text-slate-300" />
+        )}
+      </div>
+
+      {confirmReset && (
+        <ConfirmModal
+          title="Gerar novo link do Apple Watch?"
+          message="O link atual vai parar de funcionar. Você vai precisar atualizar o Atalho do iPhone com o novo link."
+          confirmLabel="Gerar novo link"
+          onCancel={() => setConfirmReset(false)}
+          onConfirm={resetWebhook}
+        />
+      )}
+    </div>
   );
 }

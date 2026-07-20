@@ -6,10 +6,11 @@ import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import db, { pdfDir } from "./db.js";
-import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt } from "./anthropic.js";
+import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, BODY_PHOTO_EXTRACTION_PROMPT } from "./anthropic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+app.set("trust proxy", 1); // necessário pra montar a URL de callback do Strava corretamente atrás do proxy do Railway
 app.use(cors());
 app.use(express.json({ limit: "60mb" }));
 
@@ -52,6 +53,8 @@ app.delete("/api/profiles/:id", (req, res) => {
   db.prepare("DELETE FROM symptoms WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM tips_history WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM activities WHERE profile_id = ?").run(id);
+  db.prepare("DELETE FROM strava_tokens WHERE profile_id = ?").run(id);
+  db.prepare("DELETE FROM activity_webhooks WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM profiles WHERE id = ?").run(id);
   res.json({ ok: true });
 });
@@ -171,6 +174,32 @@ app.put("/api/profiles/:profileId/body-entries/:entryId", (req, res) => {
   }
 });
 
+app.post("/api/profiles/:profileId/body-entries/extract-photo", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "Nenhuma imagem enviada" });
+    if (!req.file.mimetype || !req.file.mimetype.startsWith("image/")) {
+      return res.status(400).json({ error: "Envie uma imagem (foto da balança ou do app)." });
+    }
+    const base64 = req.file.buffer.toString("base64");
+    const text = await callClaude(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: req.file.mimetype, data: base64 } },
+            { type: "text", text: BODY_PHOTO_EXTRACTION_PROMPT },
+          ],
+        },
+      ],
+      500
+    );
+    const parsed = repairJson(text);
+    res.json(parsed);
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao ler a imagem" });
+  }
+});
+
 app.delete("/api/profiles/:profileId/body-entries/:entryId", (req, res) => {
   db.prepare("DELETE FROM body_entries WHERE id = ?").run(req.params.entryId);
   res.json({ ok: true });
@@ -187,6 +216,8 @@ function rowToActivity(r) {
     distanceKm: r.distance_km,
     caloriesKcal: r.calories_kcal,
     notes: r.notes,
+    source: r.source || "manual",
+    externalId: r.external_id || null,
     createdAt: r.created_at,
   };
 }
@@ -242,6 +273,184 @@ app.put("/api/profiles/:profileId/activities/:activityId", (req, res) => {
 app.delete("/api/profiles/:profileId/activities/:activityId", (req, res) => {
   db.prepare("DELETE FROM activities WHERE id = ?").run(req.params.activityId);
   res.json({ ok: true });
+});
+
+// ---------- Strava (integração via OAuth2, sincronização de atividades) ----------
+function getBaseUrl(req) {
+  return process.env.STRAVA_REDIRECT_BASE_URL || `${req.protocol}://${req.get("host")}`;
+}
+
+const STRAVA_TYPE_LABELS = {
+  Run: "Corrida", VirtualRun: "Corrida (virtual)", TrailRun: "Corrida em trilha",
+  Ride: "Pedalada", VirtualRide: "Pedalada (virtual)", MountainBikeRide: "Mountain bike",
+  Swim: "Natação", Walk: "Caminhada", Hike: "Trilha", WeightTraining: "Musculação",
+  Yoga: "Yoga", Workout: "Treino", Crossfit: "Crossfit", Elliptical: "Elíptico",
+  StairStepper: "Escada (stepper)", RowingMachine: "Remo (máquina)", Rowing: "Remo",
+};
+
+app.get("/api/profiles/:profileId/strava/connect", (req, res) => {
+  const { profileId } = req.params;
+  if (!process.env.STRAVA_CLIENT_ID) {
+    return res.status(500).send("STRAVA_CLIENT_ID não configurado no servidor. Peça pro administrador configurar as variáveis de ambiente do Strava.");
+  }
+  const redirectUri = `${getBaseUrl(req)}/api/strava/callback`;
+  const url = `https://www.strava.com/oauth/authorize?client_id=${encodeURIComponent(process.env.STRAVA_CLIENT_ID)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&approval_prompt=auto&scope=activity:read_all&state=${encodeURIComponent(profileId)}`;
+  res.redirect(url);
+});
+
+app.get("/api/strava/callback", async (req, res) => {
+  const { code, state, error } = req.query;
+  const profileId = state;
+  if (error || !code) {
+    return res.redirect(`/?strava=error`);
+  }
+  try {
+    const resp = await fetch("https://www.strava.com/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: process.env.STRAVA_CLIENT_ID,
+        client_secret: process.env.STRAVA_CLIENT_SECRET,
+        code,
+        grant_type: "authorization_code",
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.access_token) {
+      console.error("Erro ao trocar código do Strava:", data);
+      return res.redirect(`/?strava=error`);
+    }
+    db.prepare(
+      `INSERT INTO strava_tokens (profile_id, athlete_id, access_token, refresh_token, expires_at, connected_at)
+       VALUES (?,?,?,?,?,?)
+       ON CONFLICT(profile_id) DO UPDATE SET athlete_id=excluded.athlete_id, access_token=excluded.access_token, refresh_token=excluded.refresh_token, expires_at=excluded.expires_at, connected_at=excluded.connected_at`
+    ).run(profileId, String(data.athlete?.id || ""), data.access_token, data.refresh_token, data.expires_at, Date.now());
+    res.redirect(`/?connectedProfile=${encodeURIComponent(profileId)}&provider=strava`);
+  } catch (e) {
+    console.error("Erro no callback do Strava:", e);
+    res.redirect(`/?strava=error`);
+  }
+});
+
+app.get("/api/profiles/:profileId/strava/status", (req, res) => {
+  const row = db.prepare("SELECT athlete_id, connected_at FROM strava_tokens WHERE profile_id = ?").get(req.params.profileId);
+  res.json({ connected: !!row, athleteId: row?.athlete_id || null, connectedAt: row?.connected_at || null });
+});
+
+app.delete("/api/profiles/:profileId/strava/disconnect", (req, res) => {
+  db.prepare("DELETE FROM strava_tokens WHERE profile_id = ?").run(req.params.profileId);
+  res.json({ ok: true });
+});
+
+async function getValidStravaToken(profileId) {
+  const row = db.prepare("SELECT * FROM strava_tokens WHERE profile_id = ?").get(profileId);
+  if (!row) return null;
+  if (row.expires_at && row.expires_at > Math.floor(Date.now() / 1000) + 60) {
+    return row.access_token;
+  }
+  // token expirado ou perto de expirar — renova com o refresh_token
+  const resp = await fetch("https://www.strava.com/oauth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: process.env.STRAVA_CLIENT_ID,
+      client_secret: process.env.STRAVA_CLIENT_SECRET,
+      refresh_token: row.refresh_token,
+      grant_type: "refresh_token",
+    }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.access_token) {
+    throw new Error("Não consegui renovar o acesso ao Strava. Talvez seja necessário reconectar.");
+  }
+  db.prepare("UPDATE strava_tokens SET access_token=?, refresh_token=?, expires_at=? WHERE profile_id=?").run(
+    data.access_token, data.refresh_token, data.expires_at, profileId
+  );
+  return data.access_token;
+}
+
+app.post("/api/profiles/:profileId/strava/sync", async (req, res) => {
+  try {
+    const { profileId } = req.params;
+    const token = await getValidStravaToken(profileId);
+    if (!token) return res.status(400).json({ error: "Perfil não está conectado ao Strava." });
+
+    const resp = await fetch("https://www.strava.com/api/v3/athlete/activities?per_page=50", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const list = await resp.json();
+    if (!resp.ok || !Array.isArray(list)) {
+      console.error("Erro ao listar atividades do Strava:", list);
+      return res.status(502).json({ error: "Não consegui buscar as atividades do Strava agora." });
+    }
+
+    const insert = db.prepare(
+      `INSERT OR IGNORE INTO activities (id, profile_id, date, activity_type, duration_min, intensity, distance_km, calories_kcal, notes, source, external_id, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+    );
+    let imported = 0;
+    for (const a of list) {
+      const label = STRAVA_TYPE_LABELS[a.type] || STRAVA_TYPE_LABELS[a.sport_type] || a.sport_type || a.type || "Atividade";
+      const durationMin = a.moving_time ? Math.round(a.moving_time / 60) : null;
+      const distanceKm = a.distance ? Math.round((a.distance / 1000) * 100) / 100 : null;
+      const caloriesKcal = a.kilojoules ? Math.round(a.kilojoules * 0.239) : null;
+      const date = a.start_date_local ? a.start_date_local.slice(0, 10) : null;
+      const result = insert.run(
+        uid(), profileId, date, label, durationMin, null, distanceKm, caloriesKcal,
+        `${a.name || ""} (Strava)`.trim(), "strava", String(a.id), Date.now()
+      );
+      if (result.changes > 0) imported++;
+    }
+    res.json({ imported, total: list.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao sincronizar com o Strava" });
+  }
+});
+
+// ---------- Apple Watch (webhook alimentado por um Atalho do iPhone) ----------
+app.get("/api/profiles/:profileId/activity-webhook", (req, res) => {
+  const { profileId } = req.params;
+  let row = db.prepare("SELECT token FROM activity_webhooks WHERE profile_id = ?").get(profileId);
+  if (!row) {
+    const token = crypto.randomBytes(20).toString("hex");
+    db.prepare("INSERT INTO activity_webhooks (profile_id, token, created_at) VALUES (?,?,?)").run(profileId, token, Date.now());
+    row = { token };
+  }
+  res.json({ url: `${getBaseUrl(req)}/api/webhooks/activities/${row.token}` });
+});
+
+app.post("/api/profiles/:profileId/activity-webhook/reset", (req, res) => {
+  const { profileId } = req.params;
+  const token = crypto.randomBytes(20).toString("hex");
+  db.prepare(
+    `INSERT INTO activity_webhooks (profile_id, token, created_at) VALUES (?,?,?)
+     ON CONFLICT(profile_id) DO UPDATE SET token=excluded.token, created_at=excluded.created_at`
+  ).run(profileId, token, Date.now());
+  res.json({ url: `${getBaseUrl(req)}/api/webhooks/activities/${token}` });
+});
+
+// Endpoint público (autenticado só pelo token na URL) que o Atalho do iPhone chama
+app.post("/api/webhooks/activities/:token", (req, res) => {
+  try {
+    const { token } = req.params;
+    const owner = db.prepare("SELECT profile_id FROM activity_webhooks WHERE token = ?").get(token);
+    if (!owner) return res.status(404).json({ error: "Link inválido." });
+    const b = req.body || {};
+    const activityType = (b.activityType || b.type || "Treino").toString();
+    const date = (b.date || new Date().toISOString().slice(0, 10)).toString().slice(0, 10);
+    const externalId = b.externalId ? String(b.externalId) : `applewatch:${date}:${activityType}:${Date.now()}`;
+    db.prepare(
+      `INSERT OR IGNORE INTO activities (id, profile_id, date, activity_type, duration_min, intensity, distance_km, calories_kcal, notes, source, external_id, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).run(
+      uid(), owner.profile_id, date, activityType,
+      numOrNull(b.durationMin), b.intensity || null, numOrNull(b.distanceKm), numOrNull(b.caloriesKcal),
+      (b.notes || "Sincronizado do Apple Watch").toString(), "apple_watch", externalId, Date.now()
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao registrar atividade" });
+  }
 });
 
 // ---------- AI extraction ----------
@@ -565,7 +774,7 @@ app.delete("/api/profiles/:profileId/symptoms/:symptomId", (req, res) => {
 app.get("/api/export", (req, res) => {
   try {
     const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, created_at as createdAt FROM profiles").all();
-    const backup = { version: 4, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {} };
+    const backup = { version: 5, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {} };
     for (const p of profiles) {
       const activityRows = db
         .prepare("SELECT * FROM activities WHERE profile_id = ? ORDER BY date ASC, created_at ASC")
@@ -679,12 +888,12 @@ app.post("/api/import", (req, res) => {
       const activityList = (activities && activities[p.id]) || [];
       for (const a of activityList) {
         db.prepare(
-          `INSERT INTO activities (id, profile_id, date, activity_type, duration_min, intensity, distance_km, calories_kcal, notes, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?)`
+          `INSERT OR IGNORE INTO activities (id, profile_id, date, activity_type, duration_min, intensity, distance_km, calories_kcal, notes, source, external_id, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
         ).run(
           uid(), profileId, a.date || null, a.activityType || "",
           numOrNull(a.durationMin), a.intensity || null, numOrNull(a.distanceKm), numOrNull(a.caloriesKcal),
-          a.notes || "", Date.now()
+          a.notes || "", a.source || "manual", a.externalId || null, Date.now()
         );
         importedActivities++;
       }
