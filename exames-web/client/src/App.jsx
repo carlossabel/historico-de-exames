@@ -4,7 +4,6 @@ import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
   FileUp, Download, Bell, Weight, Pencil, Stethoscope, Dumbbell, Camera, Watch, Link, Copy, RefreshCw,
-  LayoutDashboard, Flame, Gauge,
 } from "lucide-react";
 import * as api from "./api.js";
 
@@ -80,9 +79,8 @@ const BODY_INDICATORS = [
   { key: "bodyWaterPct", label: "Água corporal", unit: "%", decimals: 1 },
   { key: "bmrKcal", label: "Taxa metabólica basal", unit: "kcal", decimals: 0 },
   { key: "heightCm", label: "Altura", unit: "cm", decimals: 1 },
-  { key: "systolicBp", label: "Pressão sistólica", unit: "mmHg", decimals: 0 },
-  { key: "diastolicBp", label: "Pressão diastólica", unit: "mmHg", decimals: 0 },
-  { key: "restingHeartRate", label: "Frequência cardíaca", unit: "bpm", decimals: 0 },
+  { key: "bloodPressure", label: "Pressão arterial", unit: "mmHg", decimals: 0, isBloodPressure: true },
+  { key: "restingHeartRate", label: "Frequência cardíaca em repouso", unit: "bpm", decimals: 0 },
 ];
 
 function withImc(entries) {
@@ -97,6 +95,18 @@ function withImc(entries) {
 function fmtNum(v, decimals = 1) {
   if (v === null || v === undefined) return "—";
   return Number(v).toLocaleString("pt-BR", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+// Deixa o nome do laboratório mais enxuto pra exibição: corta o que costuma vir depois
+// (cidade/UF, separada por " - ", "/" ou vírgula) e remove a palavra "exame(s)" solta.
+function compactLabName(lab) {
+  if (!lab) return lab;
+  let s = lab.split(/\s[-–—]\s|\/|,/)[0];
+  s = s.replace(/\bexames?\b/gi, "");
+  s = s.replace(/\s{2,}/g, " ").trim();
+  s = s.replace(/\s+(de|da|do|dos|das)\s*$/i, "").trim();
+  s = s.replace(/[-.,\s]+$/, "").trim();
+  return s || lab;
 }
 
 export default function App() {
@@ -443,7 +453,7 @@ function ProfileScreen({ profile, onBack, initialTab }) {
       });
     } catch (e) {
       if (e.duplicate) {
-        setUploadError(`Esse arquivo já foi importado antes (laudo de ${fmtDate(e.dupInfo.date)}, ${e.dupInfo.lab || "sem lab informado"}). Não vou importar de novo para não duplicar exames no histórico.`);
+        setUploadError(`Esse arquivo já foi importado antes (laudo de ${fmtDate(e.dupInfo.date)}, ${compactLabName(e.dupInfo.lab) || "sem lab informado"}). Não vou importar de novo para não duplicar exames no histórico.`);
       } else {
         setUploadError(e.message || "Não consegui ler esse PDF. Tente novamente ou adicione os exames manualmente.");
       }
@@ -476,16 +486,6 @@ function ProfileScreen({ profile, onBack, initialTab }) {
 
   const orderedBatchIds = index.map((b) => b.batchId);
   const latestBatch = orderedBatchIds.length ? batches[orderedBatchIds[0]] : null;
-  const latestScore = latestBatch ? computeScore(latestBatch.results) : null;
-  const scoreHistory = orderedBatchIds
-    .map((id) => batches[id])
-    .filter(Boolean)
-    .map((b) => ({ date: b.date, score: computeScore(b.results) }))
-    .filter((x) => x.score !== null)
-    .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-
-  let trend = null;
-  if (scoreHistory.length >= 2) trend = scoreHistory[scoreHistory.length - 1].score - scoreHistory[scoreHistory.length - 2].score;
 
   const c = PROFILE_COLORS[profile.colorIdx % PROFILE_COLORS.length];
   const hasSuggestions = !!(alertsInfo && alertsInfo.data && alertsInfo.data.temSugestoes);
@@ -552,6 +552,7 @@ function ProfileScreen({ profile, onBack, initialTab }) {
         <DashboardScreen
           profileId={profile.id}
           profileName={profile.name}
+          hasSuggestions={hasSuggestions}
           onOpenTips={() => setTipsOpen(true)}
           onGoTo={(t) => setTab(t)}
         />
@@ -574,33 +575,6 @@ function ProfileScreen({ profile, onBack, initialTab }) {
               Adicionar manualmente
             </button>
           )}
-        </div>
-      )}
-
-      {latestBatch && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
-          <ScoreCard score={latestScore} trend={trend} />
-          <CountCard
-            label="Última coleta"
-            value={fmtDate(latestBatch.date)}
-            sub={[latestBatch.lab, latestBatch.doctor ? `Dr(a). ${latestBatch.doctor}` : null].filter(Boolean).join(" · ") || "Laboratório não informado"}
-          />
-          <TipsCard onOpen={() => setTipsOpen(true)} hasSuggestions={hasSuggestions} />
-        </div>
-      )}
-
-      {scoreHistory.length >= 2 && (
-        <div className="border border-slate-200 rounded-xl p-4 mb-6">
-          <p className="text-sm font-medium text-slate-700 mb-3">Evolução do score geral</p>
-          <ResponsiveContainer width="100%" height={160}>
-            <LineChart data={scoreHistory} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="date" tickFormatter={fmtDate} tick={{ fontSize: 11, fill: "#94a3b8" }} />
-              <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#94a3b8" }} />
-              <Tooltip labelFormatter={fmtDate} formatter={(v) => [v, "Score"]} />
-              <Line type="monotone" dataKey="score" stroke="#0f766e" strokeWidth={2} dot={{ r: 3 }} />
-            </LineChart>
-          </ResponsiveContainer>
         </div>
       )}
 
@@ -657,18 +631,6 @@ function CountCard({ label, value, sub }) {
       <p className="text-lg font-medium text-slate-900">{value}</p>
       <p className="text-xs text-slate-400 truncate mt-0.5">{sub}</p>
     </div>
-  );
-}
-function TipsCard({ onOpen, hasSuggestions }) {
-  return (
-    <button onClick={onOpen} className="relative bg-slate-50 rounded-xl p-4 text-left hover:bg-slate-100 transition">
-      <p className="text-xs text-slate-500 mb-1 flex items-center gap-1"><Sparkles size={12} /> Dicas de saúde</p>
-      <p className="text-sm font-medium text-slate-900">Ver orientações</p>
-      <p className="text-xs text-slate-400 mt-0.5">Baseado nos últimos exames</p>
-      {hasSuggestions && (
-        <span className="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-red-500 ring-2 ring-slate-50" title="Há sugestão de novo exame" />
-      )}
-    </button>
   );
 }
 
@@ -739,7 +701,7 @@ function BatchHistory({ index, profileId, onDelete }) {
               <FileText size={15} className="text-slate-400 shrink-0" />
               <span className="text-sm text-slate-800">{fmtDate(b.date)}</span>
               <span className="text-xs text-slate-400 truncate">
-                {b.lab || "Lab não informado"}{b.doctor ? ` · Dr(a). ${b.doctor}` : ""} · {b.count} exames
+                {compactLabName(b.lab) || "Lab não informado"}{b.doctor ? ` · Solicitante: ${b.doctor}` : ""} · {b.count} exames
               </span>
             </div>
             <div className="flex items-center gap-1 shrink-0">
@@ -1294,8 +1256,8 @@ function BodyCompositionScreen({ profileId }) {
 
           <div className="grid grid-cols-2 gap-3 mb-6">
             <button
-              onClick={() => setSelectedIndicator("systolicBp")}
-              className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${["systolicBp", "diastolicBp"].includes(selectedIndicator) ? "ring-2 ring-slate-300" : ""}`}
+              onClick={() => setSelectedIndicator("bloodPressure")}
+              className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "bloodPressure" ? "ring-2 ring-slate-300" : ""}`}
             >
               <p className="text-xs text-slate-500 mb-1">Pressão arterial</p>
               <div className="flex items-end gap-1.5">
@@ -1309,7 +1271,7 @@ function BodyCompositionScreen({ profileId }) {
               onClick={() => setSelectedIndicator("restingHeartRate")}
               className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "restingHeartRate" ? "ring-2 ring-slate-300" : ""}`}
             >
-              <p className="text-xs text-slate-500 mb-1">Frequência cardíaca</p>
+              <p className="text-xs text-slate-500 mb-1">Frequência cardíaca em repouso</p>
               <div className="flex items-end gap-1.5">
                 <span className="text-xl font-medium text-slate-900">{fmtNum(latest?.restingHeartRate, 0)}</span>
                 <span className="text-xs text-slate-400 mb-0.5">bpm</span>
@@ -1381,6 +1343,30 @@ function BodyCompositionScreen({ profileId }) {
 }
 
 function BodyIndicatorChart({ indicator, entries }) {
+  if (indicator.isBloodPressure) {
+    const points = entries
+      .filter((e) => e.systolicBp !== null && e.systolicBp !== undefined && e.diastolicBp !== null && e.diastolicBp !== undefined)
+      .map((e) => ({ date: e.date, systolic: e.systolicBp, diastolic: e.diastolicBp }))
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+
+    if (points.length < 2) {
+      return <p className="text-sm text-slate-400 py-6 text-center">Ainda não há histórico suficiente de "Pressão arterial" para um gráfico (precisa de pelo menos 2 medições com esse dado).</p>;
+    }
+
+    return (
+      <ResponsiveContainer width="100%" height={200}>
+        <LineChart data={points} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+          <XAxis dataKey="date" tickFormatter={fmtDate} tick={{ fontSize: 11, fill: "#94a3b8" }} />
+          <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} domain={["auto", "auto"]} />
+          <Tooltip labelFormatter={fmtDate} formatter={(v, name) => [`${fmtNum(v, 0)} mmHg`, name === "systolic" ? "Sistólica" : "Diastólica"]} />
+          <Line type="monotone" dataKey="systolic" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} name="systolic" />
+          <Line type="monotone" dataKey="diastolic" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} name="diastolic" />
+        </LineChart>
+      </ResponsiveContainer>
+    );
+  }
+
   const points = entries
     .map((e) => ({ date: e.date, value: e[indicator.key] }))
     .filter((p) => p.value !== null && p.value !== undefined)
@@ -2071,47 +2057,6 @@ function ActivityIntegrations({ profileId, onSynced }) {
   );
 }
 
-function VitalRings({ scorePct, activityPct, consistencyPct }) {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setMounted(true), 80);
-    return () => clearTimeout(t);
-  }, []);
-
-  const rings = [
-    { r: 86, pct: scorePct, color: "#2dd4bf" },   // teal-400 — score dos exames
-    { r: 68, pct: activityPct, color: "#fb7185" }, // rose-400 — atividade da semana
-    { r: 50, pct: consistencyPct, color: "#fbbf24" }, // amber-400 — consistência de registro
-  ];
-
-  return (
-    <svg viewBox="0 0 200 200" className="w-40 h-40 sm:w-48 sm:h-48 shrink-0">
-      {rings.map((ring, i) => {
-        const circumference = 2 * Math.PI * ring.r;
-        const target = Math.max(0, Math.min(100, ring.pct ?? 0));
-        const offset = circumference * (1 - (mounted ? target : 0) / 100);
-        return (
-          <g key={i}>
-            <circle cx="100" cy="100" r={ring.r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="11" />
-            <circle
-              cx="100" cy="100" r={ring.r} fill="none" stroke={ring.color} strokeWidth="11" strokeLinecap="round"
-              strokeDasharray={circumference} strokeDashoffset={offset}
-              transform="rotate(-90 100 100)"
-              style={{ transition: "stroke-dashoffset 1.1s cubic-bezier(0.16,1,0.3,1)" }}
-            />
-          </g>
-        );
-      })}
-      <text x="100" y="94" textAnchor="middle" fill="white" fontSize="36" fontWeight="600">
-        {scorePct !== null ? scorePct : "—"}
-      </text>
-      <text x="100" y="118" textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize="10" letterSpacing="1.5" style={{ textTransform: "uppercase" }}>
-        score de exames
-      </text>
-    </svg>
-  );
-}
-
 function MiniSparkline({ points, color = "#0f766e" }) {
   if (!points || points.length < 2) {
     return <div className="h-10 flex items-center text-xs text-slate-300">sem histórico suficiente</div>;
@@ -2153,7 +2098,7 @@ function DashboardCard({ title, onClick, children }) {
   );
 }
 
-function DashboardScreen({ profileId, profileName, onOpenTips, onGoTo }) {
+function DashboardScreen({ profileId, profileName, hasSuggestions, onOpenTips, onGoTo }) {
   const [loading, setLoading] = useState(true);
   const [index, setIndex] = useState([]);
   const [batches, setBatches] = useState({});
@@ -2212,54 +2157,40 @@ function DashboardScreen({ profileId, profileName, onOpenTips, onGoTo }) {
     return { label: "DSTQQSS"[d.getDay()], minutes, iso };
   });
   const weeklyMinutes = last7Days.reduce((s, d) => s + d.minutes, 0);
-  const activityPct = Math.round(Math.min(100, (weeklyMinutes / 150) * 100));
-
-  const windowStart = daysAgo(29);
-  const activeDates = new Set();
-  index.forEach((b) => { if (b.date >= windowStart) activeDates.add(b.date); });
-  bodyEntries.forEach((e) => { if (e.date >= windowStart) activeDates.add(e.date); });
-  symptoms.forEach((s) => { if (s.date >= windowStart) activeDates.add(s.date); });
-  activities.forEach((a) => { if (a.date >= windowStart) activeDates.add(a.date); });
-  const consistencyPct = Math.round((activeDates.size / 30) * 100);
 
   const activeSymptoms = symptoms.filter((s) => s.status !== "resolvido").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
-  const hasAnyData = index.length > 0 || bodyEntries.length > 0 || symptoms.length > 0 || activities.length > 0;
-
-  const headline = !hasAnyData
-    ? `Ainda não há nada registrado para ${profileName}. Comece por um exame, uma medição ou uma atividade.`
-    : `${latestScore !== null ? `${latestScore} de 100 nos exames` : "sem exames ainda"} · ${weeklyMinutes} min de atividade essa semana · acompanhamento em ${consistencyPct}% dos últimos 30 dias.`;
+  const latestBatchMeta = index.length ? index.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0] : null;
 
   return (
     <div>
-      <div className="rounded-3xl bg-slate-900 p-6 sm:p-8 mb-6 flex flex-col sm:flex-row items-center gap-6 sm:gap-8">
-        <VitalRings scorePct={latestScore} activityPct={activityPct} consistencyPct={consistencyPct} />
-        <div className="text-center sm:text-left">
-          <p className="text-teal-300 text-xs uppercase tracking-[0.2em] mb-2">Painel de {profileName}</p>
-          <p className="text-white text-lg sm:text-xl leading-snug mb-4">
-            {headline}
-          </p>
-          <div className="flex flex-wrap justify-center sm:justify-start gap-4 text-xs text-white/70">
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-teal-400" /> Score de exames</span>
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-rose-400" /> Atividade da semana</span>
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400" /> Consistência de registro</span>
-          </div>
+      {latestBatchMeta && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+          <ScoreCard score={latestScore} trend={scoreTrend} />
+          <CountCard
+            label="Última coleta"
+            value={fmtDate(latestBatchMeta.date)}
+            sub={[compactLabName(latestBatchMeta.lab), latestBatchMeta.doctor ? `Solicitante: ${latestBatchMeta.doctor}` : null].filter(Boolean).join(" · ") || "Laboratório não informado"}
+          />
         </div>
-      </div>
+      )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-        <DashboardCard title="Tendência do score" onClick={() => onGoTo("exames")}>
-          <div className="flex items-end gap-2 mb-1">
-            <span className="text-2xl font-medium text-slate-900">{latestScore ?? "—"}</span>
-            {scoreTrend !== null && scoreTrend !== 0 && (
-              <span className={`flex items-center text-xs mb-1 ${scoreTrend > 0 ? "text-emerald-600" : "text-red-600"}`}>
-                {scoreTrend > 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />} {Math.abs(scoreTrend)}
-              </span>
-            )}
-          </div>
-          <MiniSparkline points={scoreHistory} color="#2dd4bf" />
-        </DashboardCard>
+      {scoreHistory.length >= 2 && (
+        <div className="border border-slate-200 rounded-xl p-4 mb-6">
+          <p className="text-sm font-medium text-slate-700 mb-3">Evolução do score geral</p>
+          <ResponsiveContainer width="100%" height={160}>
+            <LineChart data={scoreHistory} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey="date" tickFormatter={fmtDate} tick={{ fontSize: 11, fill: "#94a3b8" }} />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#94a3b8" }} />
+              <Tooltip labelFormatter={fmtDate} formatter={(v) => [v, "Score"]} />
+              <Line type="monotone" dataKey="value" stroke="#0f766e" strokeWidth={2} dot={{ r: 3 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
         <DashboardCard title="Saúde física" onClick={() => onGoTo("corpo")}>
           <div className="flex items-end gap-2 mb-1">
             <span className="text-2xl font-medium text-slate-900">
@@ -2300,11 +2231,20 @@ function DashboardScreen({ profileId, profileName, onOpenTips, onGoTo }) {
 
       <button
         onClick={onOpenTips}
-        className="w-full flex items-center justify-between gap-3 bg-slate-50 hover:bg-slate-100 transition border border-slate-200 rounded-xl px-4 py-3"
+        className="relative w-full flex items-center justify-between gap-3 bg-slate-50 hover:bg-slate-100 transition border border-slate-200 rounded-xl px-4 py-3"
       >
-        <span className="flex items-center gap-2 text-sm text-slate-700"><Bell size={15} /> Dicas de saúde e sugestão de exames, cruzando tudo isso com IA</span>
+        <span className="flex items-center gap-2 text-sm text-slate-700">
+          <Bell size={15} /> Dicas de saúde e sugestão de exames, cruzando tudo isso com IA
+          {hasSuggestions && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" />}
+        </span>
         <ChevronRight size={16} className="text-slate-400 shrink-0" />
       </button>
+
+      {!latestBatchMeta && !latestBody && !activeSymptoms.length && weeklyMinutes === 0 && (
+        <p className="text-sm text-slate-400 text-center mt-6">
+          Ainda não há nada registrado para {profileName}. Comece por um exame, uma medição ou uma atividade.
+        </p>
+      )}
     </div>
   );
 }
