@@ -64,7 +64,9 @@ app.get("/api/profiles/:profileId/batches", (req, res) => {
   const { profileId } = req.params;
   const rows = db
     .prepare(
-      "SELECT id as batchId, date, lab, doctor, file_hash as hash, has_pdf as hasPdf, pdf_filename as fileName, saved_at as savedAt FROM batches WHERE profile_id = ? ORDER BY date DESC"
+      `SELECT id as batchId, date, lab, doctor, file_hash as hash, has_pdf as hasPdf, pdf_filename as fileName, saved_at as savedAt,
+              (SELECT COUNT(*) FROM results WHERE results.batch_id = batches.id) as count
+       FROM batches WHERE profile_id = ? ORDER BY date DESC`
     )
     .all(profileId);
   res.json(rows);

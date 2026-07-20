@@ -100,9 +100,34 @@ function fmtNum(v, decimals = 1) {
 
 // Deixa o nome do laboratório mais enxuto pra exibição: corta o que costuma vir depois
 // (cidade/UF, separada por " - ", "/" ou vírgula) e remove a palavra "exame(s)" solta.
+// Marcas de laboratório conhecidas — se o nome contiver uma delas, corta logo depois
+// da marca (mesmo sem separador antes da cidade, ex: "Laboratório Unimed Jaraguá do Sul").
+const KNOWN_LAB_BRANDS = [
+  "unimed", "fleury", "dasa", "hermes pardini", "sabin", "alvaro", "álvaro",
+  "diagnósticos da américa", "diagnosticos da america", "lavoisier", "bronstein",
+  "cerba", "labi", "delboni auriemo", "delboni", "salomão zoppi", "salomao zoppi",
+  "richet", "cdb", "exame dna", "biocor", "weinmann", "cedic", "labs", "cientifica",
+  "científica", "citogenetica", "citogenética",
+];
+
+// Deixa o nome do laboratório mais enxuto pra exibição: corta o que costuma vir depois
+// (cidade/UF, separada por " - ", "/" ou vírgula, ou logo após uma marca conhecida) e
+// remove a palavra "exame(s)" solta.
 function compactLabName(lab) {
   if (!lab) return lab;
-  let s = lab.split(/\s[-–—]\s|\/|,/)[0];
+  let s = lab;
+
+  const lower = s.toLowerCase();
+  const brandHit = KNOWN_LAB_BRANDS
+    .map((brand) => ({ brand, idx: lower.indexOf(brand) }))
+    .filter((b) => b.idx !== -1)
+    .sort((a, b) => (a.idx + a.brand.length) - (b.idx + b.brand.length))[0];
+  if (brandHit) {
+    s = s.slice(0, brandHit.idx + brandHit.brand.length);
+  } else {
+    s = s.split(/\s[-–—]\s|\/|,/)[0];
+  }
+
   s = s.replace(/\bexames?\b/gi, "");
   s = s.replace(/\s{2,}/g, " ").trim();
   s = s.replace(/\s+(de|da|do|dos|das)\s*$/i, "").trim();
