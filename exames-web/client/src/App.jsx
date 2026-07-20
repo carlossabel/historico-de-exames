@@ -4,6 +4,7 @@ import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
   FileUp, Download, Bell, Weight, Pencil, Stethoscope, Dumbbell, Camera, Watch, Link, Copy, RefreshCw,
+  Footprints, PersonStanding, Bike, Waves, Mountain, CircleDot, Music, Zap, Flame,
 } from "lucide-react";
 import * as api from "./api.js";
 
@@ -1398,8 +1399,6 @@ const BODY_FORM_FIELDS = [
   { key: "boneMassKg", label: "Massa óssea (kg)", step: "0.01" },
   { key: "bodyWaterPct", label: "Água corporal (%)", step: "0.1" },
   { key: "bmrKcal", label: "Taxa metabólica basal (kcal)", step: "1" },
-  { key: "systolicBp", label: "Pressão sistólica (mmHg)", step: "1" },
-  { key: "diastolicBp", label: "Pressão diastólica (mmHg)", step: "1" },
   { key: "restingHeartRate", label: "Frequência cardíaca (bpm)", step: "1" },
 ];
 
@@ -1414,11 +1413,12 @@ function BodyEntryModal({ entry, onCancel, onSave }) {
     boneMassKg: entry.boneMassKg ?? "",
     bodyWaterPct: entry.bodyWaterPct ?? "",
     bmrKcal: entry.bmrKcal ?? "",
-    systolicBp: entry.systolicBp ?? "",
-    diastolicBp: entry.diastolicBp ?? "",
     restingHeartRate: entry.restingHeartRate ?? "",
     notes: entry.notes || "",
   });
+  const [bloodPressureText, setBloodPressureText] = useState(
+    entry.systolicBp != null && entry.diastolicBp != null ? `${entry.systolicBp}/${entry.diastolicBp}` : ""
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -1426,10 +1426,22 @@ function BodyEntryModal({ entry, onCancel, onSave }) {
 
   const handleSave = async () => {
     if (!form.date) return;
+    let systolicBp = null;
+    let diastolicBp = null;
+    const trimmed = bloodPressureText.trim();
+    if (trimmed) {
+      const match = trimmed.match(/^(\d{2,3})\s*\/\s*(\d{2,3})$/);
+      if (!match) {
+        setError('Pressão arterial deve estar no formato "sistólica/diastólica", ex: 120/80.');
+        return;
+      }
+      systolicBp = Number(match[1]);
+      diastolicBp = Number(match[2]);
+    }
     setSaving(true);
     setError(null);
     try {
-      await onSave({ ...form, id: entry.id });
+      await onSave({ ...form, systolicBp, diastolicBp, id: entry.id });
     } catch (e) {
       setError(e.message || "Erro ao salvar medição.");
     } finally {
@@ -1455,6 +1467,17 @@ function BodyEntryModal({ entry, onCancel, onSave }) {
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Pressão arterial (mmHg)</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={bloodPressureText}
+            onChange={(e) => setBloodPressureText(e.target.value)}
+            placeholder="Ex: 120/80"
+            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
+          />
+        </div>
         {BODY_FORM_FIELDS.map((f) => (
           <div key={f.key}>
             <label className="text-xs text-slate-500 mb-1 block">{f.label}</label>
@@ -1704,6 +1727,27 @@ const ACTIVITY_INTENSITY_META = {
   intensa: { label: "Intensa", chip: "bg-red-100 text-red-700" },
 };
 
+const ACTIVITY_TYPE_OPTIONS = [
+  { value: "Corrida", Icon: Footprints },
+  { value: "Caminhada", Icon: PersonStanding },
+  { value: "Musculação", Icon: Dumbbell },
+  { value: "Ciclismo", Icon: Bike },
+  { value: "Natação", Icon: Waves },
+  { value: "Yoga", Icon: Zap },
+  { value: "Pilates", Icon: Zap },
+  { value: "Trilha", Icon: Mountain },
+  { value: "Futebol", Icon: CircleDot },
+  { value: "Crossfit", Icon: Flame },
+  { value: "Dança", Icon: Music },
+];
+
+function getActivityIcon(activityType) {
+  if (!activityType) return Dumbbell;
+  const t = activityType.toLowerCase();
+  const found = ACTIVITY_TYPE_OPTIONS.find((o) => t.includes(o.value.toLowerCase()));
+  return found ? found.Icon : Dumbbell;
+}
+
 function daysAgo(n) {
   const d = new Date();
   d.setDate(d.getDate() - n);
@@ -1785,12 +1829,15 @@ function ActivitiesScreen({ profileId }) {
         <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
           {ordered.map((a) => {
             const intMeta = a.intensity ? ACTIVITY_INTENSITY_META[a.intensity] : null;
+            const ActivityIcon = getActivityIcon(a.activityType);
             return (
               <div key={a.id} className="flex items-start justify-between gap-3 px-4 py-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap mb-0.5">
                     <span className="text-sm text-slate-800 font-medium">{fmtDate(a.date)}</span>
-                    <span className="text-sm text-slate-700">{a.activityType}</span>
+                    <span className="flex items-center gap-1.5 text-sm text-slate-700">
+                      <ActivityIcon size={14} className="text-slate-400 shrink-0" /> {a.activityType}
+                    </span>
                     {intMeta && <span className={`text-xs px-2 py-0.5 rounded-full ${intMeta.chip}`}>{intMeta.label}</span>}
                     {a.source === "strava" && <span className="text-xs px-2 py-0.5 rounded-full bg-orange-100 text-orange-700">Strava</span>}
                     {a.source === "apple_watch" && <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">Apple Watch</span>}
@@ -1833,26 +1880,29 @@ function ActivitiesScreen({ profileId }) {
 }
 
 function ActivityModal({ entry, onCancel, onSave }) {
+  const isPreset = ACTIVITY_TYPE_OPTIONS.some((o) => o.value === entry.activityType);
   const [form, setForm] = useState({
     date: entry.date || new Date().toISOString().slice(0, 10),
-    activityType: entry.activityType || "",
     durationMin: entry.durationMin ?? "",
     intensity: entry.intensity || "",
     distanceKm: entry.distanceKm ?? "",
     caloriesKcal: entry.caloriesKcal ?? "",
     notes: entry.notes || "",
   });
+  const [typeChoice, setTypeChoice] = useState(isPreset ? entry.activityType : entry.activityType ? "Outro" : "");
+  const [customType, setCustomType] = useState(isPreset ? "" : entry.activityType || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
   const setField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+  const finalType = typeChoice === "Outro" ? customType.trim() : typeChoice;
 
   const handleSave = async () => {
-    if (!form.date || !form.activityType.trim()) return;
+    if (!form.date || !finalType) return;
     setSaving(true);
     setError(null);
     try {
-      await onSave({ ...form, id: entry.id });
+      await onSave({ ...form, activityType: finalType, id: entry.id });
     } catch (e) {
       setError(e.message || "Erro ao salvar atividade.");
     } finally {
@@ -1869,13 +1919,27 @@ function ActivityModal({ entry, onCancel, onSave }) {
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Tipo de atividade</label>
-          <input
+          <select
             autoFocus
-            value={form.activityType}
-            onChange={(e) => setField("activityType", e.target.value)}
-            placeholder="Ex: Corrida, Musculação, Yoga..."
+            value={typeChoice}
+            onChange={(e) => setTypeChoice(e.target.value)}
             className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
-          />
+          >
+            <option value="">Selecione...</option>
+            {ACTIVITY_TYPE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.value}</option>
+            ))}
+            <option value="Outro">Outro...</option>
+          </select>
+          {typeChoice === "Outro" && (
+            <input
+              autoFocus
+              value={customType}
+              onChange={(e) => setCustomType(e.target.value)}
+              placeholder="Digite o tipo de atividade"
+              className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm mt-1.5"
+            />
+          )}
         </div>
       </div>
 
@@ -1917,7 +1981,7 @@ function ActivityModal({ entry, onCancel, onSave }) {
       <div className="flex justify-end gap-2">
         <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
         <button
-          disabled={!form.date || !form.activityType.trim() || saving}
+          disabled={!form.date || !finalType || saving}
           onClick={handleSave}
           className="flex items-center gap-1.5 text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
         >
