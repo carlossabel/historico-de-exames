@@ -3,7 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
-  FileUp, Download,
+  FileUp, Download, Bell,
 } from "lucide-react";
 import * as api from "./api.js";
 
@@ -335,6 +335,9 @@ function ProfileScreen({ profile, onBack }) {
   const [reviewData, setReviewData] = useState(null);
   const [tipsOpen, setTipsOpen] = useState(false);
   const [selectedExam, setSelectedExam] = useState(null);
+  const [alertsInfo, setAlertsInfo] = useState(null);
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const fileInputRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -345,7 +348,28 @@ function ProfileScreen({ profile, onBack }) {
     setBatches(loaded);
   }, [profile.id]);
 
+  const refreshAlerts = useCallback(async () => {
+    try {
+      setAlertsInfo(await api.getAlerts(profile.id));
+    } catch (e) {
+      setAlertsInfo(null);
+    }
+  }, [profile.id]);
+
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { refreshAlerts(); }, [refreshAlerts]);
+
+  const runAnalyze = async () => {
+    setAnalyzing(true);
+    try {
+      const data = await api.analyzeAlerts(profile.id);
+      setAlertsInfo(data);
+    } catch (e) {
+      setAlertsInfo((prev) => ({ ...(prev || {}), error: e.message || "Erro ao analisar histórico." }));
+    } finally {
+      setAnalyzing(false);
+    }
+  };
 
   const handleFile = async (file) => {
     setUploadError(null);
@@ -386,12 +410,14 @@ function ProfileScreen({ profile, onBack }) {
     setIndex((prev) => [...(prev || []), newIndexEntry].sort((a, b) => (b.date || "").localeCompare(a.date || "")));
     setBatches((prev) => ({ ...prev, [batchId]: { date: data.date, lab: data.lab, results: data.results } }));
     setReviewData(null);
+    refreshAlerts();
   };
 
   const removeBatch = async (batchId) => {
     await api.deleteBatch(profile.id, batchId);
     setIndex((prev) => (prev || []).filter((b) => b.batchId !== batchId));
     setBatches((prev) => { const n = { ...prev }; delete n[batchId]; return n; });
+    refreshAlerts();
   };
 
   if (index === null) {
@@ -412,6 +438,7 @@ function ProfileScreen({ profile, onBack }) {
   if (scoreHistory.length >= 2) trend = scoreHistory[scoreHistory.length - 1].score - scoreHistory[scoreHistory.length - 2].score;
 
   const c = PROFILE_COLORS[profile.colorIdx % PROFILE_COLORS.length];
+  const hasSuggestions = !!(alertsInfo && alertsInfo.data && alertsInfo.data.temSugestoes);
 
   return (
     <div>
@@ -428,6 +455,17 @@ function ProfileScreen({ profile, onBack }) {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setAlertsOpen(true)}
+            className="relative text-slate-500 hover:text-slate-800 border border-slate-200 rounded-lg p-2 hover:bg-slate-50"
+            aria-label="Sugestões de novos exames"
+            title="Sugestões de novos exames"
+          >
+            <Bell size={17} />
+            {hasSuggestions && (
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 ring-2 ring-white" />
+            )}
+          </button>
           <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
           <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
             {uploading ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
@@ -487,6 +525,15 @@ function ProfileScreen({ profile, onBack }) {
       {reviewData && <ReviewModal data={reviewData} onCancel={() => setReviewData(null)} onConfirm={saveBatch} />}
 
       {tipsOpen && latestBatch && <TipsModal results={latestBatch.results} onClose={() => setTipsOpen(false)} />}
+
+      {alertsOpen && (
+        <AlertsModal
+          info={alertsInfo}
+          analyzing={analyzing}
+          onAnalyze={runAnalyze}
+          onClose={() => setAlertsOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -793,6 +840,102 @@ function TipsModal({ results, onClose }) {
       )}
       <div className="flex items-start gap-2 text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 mt-2">
         <Info size={13} className="mt-0.5 shrink-0" /> {TIPS_DISCLAIMER}
+      </div>
+    </ModalShell>
+  );
+}
+
+const ALERTS_DISCLAIMER = "Essas sugestões são geradas por IA a partir do histórico de exames e servem só como ponto de partida para conversar com um médico — não são uma indicação médica definitiva.";
+const URGENCY_META = {
+  baixa: { label: "Baixa", chip: "bg-slate-100 text-slate-600" },
+  media: { label: "Média", chip: "bg-amber-100 text-amber-700" },
+  alta: { label: "Alta", chip: "bg-red-100 text-red-700" },
+};
+
+function AlertsModal({ info, analyzing, onAnalyze, onClose }) {
+  const hasBatches = info ? info.hasBatches : true;
+  const data = info?.data || null;
+  const stale = !!info?.stale;
+  const error = info?.error;
+
+  return (
+    <ModalShell onClose={onClose} title="Sugestões de novos exames" wide>
+      {!hasBatches && (
+        <p className="text-sm text-slate-500 mb-2">
+          Envie pelo menos um laudo de exame para essa pessoa antes de pedir uma análise.
+        </p>
+      )}
+
+      {hasBatches && !data && !analyzing && (
+        <div className="text-center py-6">
+          <p className="text-sm text-slate-500 mb-4">
+            A IA pode olhar todo o histórico dessa pessoa e dizer se algum exame novo faz sentido pedir — só sugere
+            quando há um motivo real nos dados, não fica pedindo exame à toa.
+          </p>
+          <button
+            onClick={onAnalyze}
+            className="text-sm px-4 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800"
+          >
+            Analisar histórico agora
+          </button>
+        </div>
+      )}
+
+      {analyzing && (
+        <div className="flex items-center gap-2 text-slate-400 text-sm py-8 justify-center">
+          <Loader2 size={16} className="animate-spin" /> Analisando o histórico de exames...
+        </div>
+      )}
+
+      {error && (
+        <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+
+      {data && !analyzing && (
+        <div>
+          {stale && (
+            <div className="mb-4 flex items-center justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              <span className="flex items-center gap-1.5"><Info size={13} /> Há laudos novos desde a última análise.</span>
+              <button onClick={onAnalyze} className="underline whitespace-nowrap shrink-0">Atualizar análise</button>
+            </div>
+          )}
+
+          <p className="text-sm text-slate-700 mb-4">{data.resumo}</p>
+
+          {data.temSugestoes && (data.sugestoes || []).length > 0 ? (
+            <ul className="space-y-3 mb-4">
+              {data.sugestoes.map((s, i) => {
+                const meta = URGENCY_META[s.urgencia] || URGENCY_META.baixa;
+                return (
+                  <li key={i} className="border border-slate-200 rounded-lg p-3">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <p className="text-sm font-medium text-slate-900">{s.exame}</p>
+                      <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${meta.chip}`}>{meta.label}</span>
+                    </div>
+                    <p className="text-xs text-slate-500">{s.motivo}</p>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5 mb-4 text-sm">
+              <CheckCircle2 size={16} className="shrink-0" />
+              Nada no histórico justifica pedir exames novos agora.
+            </div>
+          )}
+
+          {!stale && (
+            <button onClick={onAnalyze} className="text-xs text-slate-500 hover:text-slate-800 underline mb-2">
+              Analisar de novo
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="flex items-start gap-2 text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 mt-2">
+        <Info size={13} className="mt-0.5 shrink-0" /> {ALERTS_DISCLAIMER}
       </div>
     </ModalShell>
   );

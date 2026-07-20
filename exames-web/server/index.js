@@ -6,7 +6,7 @@ import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import db, { pdfDir } from "./db.js";
-import { callClaude, parseExamJson, extractJsonBlock, EXTRACTION_PROMPT } from "./anthropic.js";
+import { callClaude, parseExamJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt } from "./anthropic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -47,6 +47,7 @@ app.delete("/api/profiles/:id", (req, res) => {
     db.prepare("DELETE FROM results WHERE batch_id = ?").run(b.id);
   }
   db.prepare("DELETE FROM batches WHERE profile_id = ?").run(id);
+  db.prepare("DELETE FROM alerts WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM profiles WHERE id = ?").run(id);
   res.json({ ok: true });
 });
@@ -170,6 +171,69 @@ app.post("/api/tips", async (req, res) => {
     res.json(parsed);
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao gerar dicas" });
+  }
+});
+
+// ---------- Alerts (sugestões de novos exames via IA) ----------
+function latestBatchId(profileId) {
+  const row = db
+    .prepare("SELECT id FROM batches WHERE profile_id = ? ORDER BY date DESC, saved_at DESC LIMIT 1")
+    .get(profileId);
+  return row ? row.id : null;
+}
+
+function buildHistoryText(profileId, maxBatches = 10) {
+  const batchRows = db
+    .prepare("SELECT id, date, lab FROM batches WHERE profile_id = ? ORDER BY date ASC, saved_at ASC")
+    .all(profileId);
+  const recent = batchRows.slice(-maxBatches);
+  return recent
+    .map((b) => {
+      const results = db
+        .prepare("SELECT name, value, unit, ref, status FROM results WHERE batch_id = ?")
+        .all(b.id);
+      const lines = results.map((r) => {
+        const statusLabel = r.status === "F" ? "fora do ideal" : r.status === "A" ? "atenção" : "ideal";
+        return `- ${r.name}: ${r.value} ${r.unit || ""} (ref: ${r.ref || "n/d"}) [${statusLabel}]`;
+      });
+      return `Laudo de ${b.date || "data não informada"} (${b.lab || "lab não informado"}):\n${lines.join("\n")}`;
+    })
+    .join("\n\n");
+}
+
+// Leitura rápida (sem custo de IA) — usada para mostrar o sino e decidir se precisa reanalisar
+app.get("/api/profiles/:profileId/alerts", (req, res) => {
+  const { profileId } = req.params;
+  const latest = latestBatchId(profileId);
+  if (!latest) return res.json({ data: null, stale: false, hasBatches: false });
+  const stored = db.prepare("SELECT * FROM alerts WHERE profile_id = ?").get(profileId);
+  if (!stored) return res.json({ data: null, stale: true, hasBatches: true });
+  const stale = stored.based_on_batch_id !== latest;
+  res.json({ data: JSON.parse(stored.data), stale, hasBatches: true, createdAt: stored.created_at });
+});
+
+// Roda a análise de IA de fato (chamada explícita, não automática, pra não gastar API à toa)
+app.post("/api/profiles/:profileId/alerts/analyze", async (req, res) => {
+  try {
+    const { profileId } = req.params;
+    const latest = latestBatchId(profileId);
+    if (!latest) return res.status(400).json({ error: "Ainda não há exames suficientes para analisar." });
+
+    const historyText = buildHistoryText(profileId);
+    const prompt = buildAlertsPrompt(historyText);
+    const text = await callClaude([{ role: "user", content: prompt }], 1000);
+    const parsed = JSON.parse(extractJsonBlock(text));
+
+    const dataStr = JSON.stringify(parsed);
+    db.prepare(
+      `INSERT INTO alerts (profile_id, based_on_batch_id, has_suggestions, data, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(profile_id) DO UPDATE SET based_on_batch_id = excluded.based_on_batch_id, has_suggestions = excluded.has_suggestions, data = excluded.data, created_at = excluded.created_at`
+    ).run(profileId, latest, parsed.temSugestoes ? 1 : 0, dataStr, Date.now());
+
+    res.json({ data: parsed, stale: false, hasBatches: true, createdAt: Date.now() });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao analisar histórico de exames" });
   }
 });
 

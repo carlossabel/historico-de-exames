@@ -40,6 +40,14 @@ CREATE TABLE IF NOT EXISTS results (
   category TEXT
 );
 
+CREATE TABLE IF NOT EXISTS alerts (
+  profile_id TEXT PRIMARY KEY,
+  based_on_batch_id TEXT,
+  has_suggestions INTEGER NOT NULL DEFAULT 0,
+  data TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_batches_profile ON batches(profile_id);
 CREATE INDEX IF NOT EXISTS idx_results_batch ON results(batch_id);
 `);

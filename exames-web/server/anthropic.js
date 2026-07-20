@@ -67,3 +67,23 @@ Regras:
 - "c" categoria curta (ex: Hematologia, Bioquimica, Hormonios, Lipidograma, Vitaminas, Urina, Outro).
 - Nao invente valores. Se um campo nao existir, use string vazia.
 - Responda em portugues.`;
+
+export function buildAlertsPrompt(historyText) {
+  return `Você é um assistente clínico de apoio (não substitui um médico) analisando o HISTÓRICO COMPLETO de exames laboratoriais de uma pessoa, em ordem cronológica, para decidir se faz sentido sugerir a ela que peça exames complementares novos.
+
+Histórico (cada bloco é um laudo, do mais antigo para o mais recente):
+${historyText}
+
+Seu critério deve ser rigoroso e conservador:
+- SÓ sugira um exame novo/complementar se houver um motivo concreto nos dados: um resultado fora da faixa (F) que normalmente pede confirmação ou investigação complementar, uma tendência de piora ao longo do tempo (mesmo dentro da faixa), um valor em atenção (A) que persiste ou piora em mais de uma coleta, ou uma combinação de resultados que sugere investigar algo específico.
+- NÃO sugira exames "de rotina" genéricos, exames que já aparecem recentemente no histórico sem motivo de repetir, ou sugestões vagas tipo "faça check-up completo".
+- Se os dados não justificarem nenhum exame novo agora, retorne temSugestoes:false — isso é o resultado esperado na maioria das vezes, não force sugestões para parecer útil.
+- Cada sugestão precisa citar o dado concreto do histórico que a motiva (nome do exame já feito, valores, datas).
+- Nunca diagnostique doenças nem cite nomes de medicamentos. Nunca use tom alarmista.
+- No máximo 5 sugestões.
+
+Responda APENAS com JSON válido, sem markdown, sem texto antes ou depois, no formato exato:
+{"temSugestoes": true|false, "resumo": "1-2 frases explicando a conclusão geral", "sugestoes": [{"exame": "nome do exame sugerido", "motivo": "explicação curta baseada nos dados concretos do histórico", "urgencia": "baixa|media|alta"}]}
+
+Responda em português.`;
+}

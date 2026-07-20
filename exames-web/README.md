@@ -2,7 +2,8 @@
 
 Sistema web para guardar o histórico de exames laboratoriais de várias pessoas
 (perfis), com leitura automática de PDF via IA, alerta visual (ideal / atenção
-/ fora do ideal), score de saúde, gráfico de evolução e dicas gerais.
+/ fora do ideal), score de saúde, gráfico de evolução, sugestões de novos
+exames via IA e dicas gerais.
 
 Stack: backend em Node + Express + SQLite (`better-sqlite3`), frontend em
 React + Vite. Um único container serve os dois.
@@ -81,19 +82,22 @@ login), mas vale saber antes de divulgar o link amplamente.
   URL pública vê e edita os dados de todos os perfis. Se for publicar
   amplamente, adicione autenticação (ex: um middleware de senha simples no
   Express, ou um provedor como Auth0/Clerk) antes de colocar dados reais.
-- **Custo de API**: cada PDF enviado e cada geração de dicas consome créditos
-  da sua chave da Anthropic (modelo `claude-sonnet-5`, até 1000 tokens de
-  saída por chamada).
+- **Custo de API**: cada PDF enviado, cada geração de dicas e cada análise de
+  sugestões de novos exames consome créditos da sua chave da Anthropic
+  (modelo `claude-sonnet-5`, até 1000 tokens de saída por chamada). A
+  análise de sugestões só roda quando alguém clica em "Analisar", nunca
+  automaticamente.
 - **Dados de saúde são sensíveis**: garanta backup do volume de dados e
   avalie criptografar o disco na hospedagem escolhida.
-- **Dicas geradas não substituem avaliação médica** — isso já fica explícito
-  na interface, mas vale reforçar para quem for usar o sistema.
+- **Dicas e sugestões geradas não substituem avaliação médica** — isso já
+  fica explícito na interface, mas vale reforçar para quem for usar o
+  sistema.
 
 ## Estrutura
 
 ```
 server/         API em Express + SQLite
-  index.js      rotas (perfis, laudos, extração por IA, dicas)
+  index.js      rotas (perfis, laudos, extração por IA, dicas, alertas/sugestões)
   db.js         schema e conexão SQLite
   anthropic.js  chamada à API da Anthropic
   data/         (criado em runtime) banco de dados + PDFs guardados

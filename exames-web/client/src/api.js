@@ -86,3 +86,17 @@ export async function getTips(results) {
   if (!r.ok) throw new Error(data.error || "Erro ao gerar dicas");
   return data;
 }
+
+export async function getAlerts(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/alerts`);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao buscar alertas");
+  return data;
+}
+
+export async function analyzeAlerts(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/alerts/analyze`, { method: "POST" });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao analisar histórico de exames");
+  return data;
+}
