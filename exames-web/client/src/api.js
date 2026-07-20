@@ -76,15 +76,23 @@ export async function importBackup(backupData) {
   return data;
 }
 
-export async function getTips(profileId, results) {
-  const r = await fetch("/api/tips", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ profileId, results }),
-  });
+export async function getTips(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/tips`);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao buscar dicas");
+  return data;
+}
+
+export async function generateTips(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/tips/generate`, { method: "POST" });
   const data = await r.json();
   if (!r.ok) throw new Error(data.error || "Erro ao gerar dicas");
   return data;
+}
+
+export async function getTipsHistory(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/tips/history`);
+  return r.json();
 }
 
 export async function getAlerts(profileId) {
@@ -161,4 +169,35 @@ export async function updateSymptom(profileId, symptomId, payload) {
 
 export async function deleteSymptom(profileId, symptomId) {
   await fetch(`/api/profiles/${profileId}/symptoms/${symptomId}`, { method: "DELETE" });
+}
+
+export async function getActivities(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/activities`);
+  return r.json();
+}
+
+export async function createActivity(profileId, payload) {
+  const r = await fetch(`/api/profiles/${profileId}/activities`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao salvar atividade");
+  return data;
+}
+
+export async function updateActivity(profileId, activityId, payload) {
+  const r = await fetch(`/api/profiles/${profileId}/activities/${activityId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao atualizar atividade");
+  return data;
+}
+
+export async function deleteActivity(profileId, activityId) {
+  await fetch(`/api/profiles/${profileId}/activities/${activityId}`, { method: "DELETE" });
 }

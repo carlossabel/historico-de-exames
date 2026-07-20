@@ -3,9 +3,10 @@
 Sistema web para guardar o histórico de exames laboratoriais de várias pessoas
 (perfis), com leitura automática de PDF via IA, alerta visual (ideal / atenção
 / fora do ideal), score de saúde, gráfico de evolução, sugestões de novos
-exames via IA, dicas gerais e acompanhamento de composição corporal (peso,
-IMC, % de gordura, massa muscular etc.) com histórico de evolução de cada
-indicador.
+exames via IA, dicas gerais, acompanhamento de composição corporal (peso,
+IMC, % de gordura, massa muscular etc.), registro de sintomas e de
+atividades físicas, tudo cruzado pela IA nas dicas e sugestões, com
+histórico de evolução de cada indicador.
 
 Stack: backend em Node + Express + SQLite (`better-sqlite3`), frontend em
 React + Vite. Um único container serve os dois.

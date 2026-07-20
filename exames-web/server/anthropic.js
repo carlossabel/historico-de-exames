@@ -74,8 +74,8 @@ Regras:
 - Nao invente valores. Se um campo nao existir, use string vazia.
 - Responda em portugues.`;
 
-export function buildAlertsPrompt(examHistoryText, bodyHistoryText, symptomsText) {
-  return `Você é um assistente clínico de apoio (não substitui um médico e NÃO faz diagnóstico) analisando três fontes de dados de uma pessoa, em conjunto, para decidir se faz sentido sugerir que ela peça exames complementares novos.
+export function buildAlertsPrompt(examHistoryText, bodyHistoryText, symptomsText, activitiesText) {
+  return `Você é um assistente clínico de apoio (não substitui um médico e NÃO faz diagnóstico) analisando quatro fontes de dados de uma pessoa, em conjunto, para decidir se faz sentido sugerir que ela peça exames complementares novos.
 
 1) Histórico de exames laboratoriais (cada bloco é um laudo, do mais antigo para o mais recente):
 ${examHistoryText || "Nenhum exame laboratorial registrado ainda."}
@@ -86,24 +86,27 @@ ${bodyHistoryText || "Nenhuma medição de composição corporal registrada aind
 3) Sintomas relatados pela pessoa (podem estar ativos ou já resolvidos):
 ${symptomsText || "Nenhum sintoma relatado."}
 
-Seu trabalho é CRUZAR essas três fontes — por exemplo: um sintoma relatado (ex.: cansaço, queda de cabelo, palpitação) combinado com um exame em atenção/fora do ideal ou uma tendência de piora na composição corporal é um motivo bem mais forte para sugerir um exame do que qualquer uma das três fontes isolada. Use essa combinação para tornar as sugestões mais direcionadas e precisas, mas o resultado continua sendo uma SUGESTÃO DE EXAME, nunca um diagnóstico de doença.
+4) Atividades físicas registradas (do mais antigo para o mais recente):
+${activitiesText || "Nenhuma atividade física registrada."}
+
+Seu trabalho é CRUZAR essas quatro fontes — por exemplo: um sintoma relatado (ex.: cansaço, queda de cabelo, palpitação) combinado com um exame em atenção/fora do ideal, uma tendência de piora na composição corporal, ou um padrão de atividade física (excesso, ausência total, ou intensidade alta com sintomas associados) é um motivo bem mais forte para sugerir um exame do que qualquer uma das fontes isolada. Use essa combinação para tornar as sugestões mais direcionadas e precisas, mas o resultado continua sendo uma SUGESTÃO DE EXAME, nunca um diagnóstico de doença.
 
 Seu critério deve ser rigoroso e conservador:
-- SÓ sugira um exame novo/complementar se houver um motivo concreto: um resultado fora da faixa (F) que pede confirmação, uma tendência de piora ao longo do tempo (exames ou composição corporal), um sintoma que persiste/agrava e que faz sentido investigar junto com os dados disponíveis, ou uma combinação relevante entre sintoma(s) e os dados numéricos.
-- NÃO sugira exames "de rotina" genéricos, exames já feitos recentemente sem motivo de repetir, nem sugestões vagas tipo "faça check-up completo". Sintomas isolados sem nenhum apoio nos dados numéricos e sem persistência também não bastam sozinhos, a menos que sejam claramente compatíveis com uma investigação específica.
+- SÓ sugira um exame novo/complementar se houver um motivo concreto: um resultado fora da faixa (F) que pede confirmação, uma tendência de piora ao longo do tempo (exames ou composição corporal), um sintoma que persiste/agrava e que faz sentido investigar junto com os dados disponíveis, um padrão de atividade física relevante combinado com outros dados, ou uma combinação relevante entre essas fontes.
+- NÃO sugira exames "de rotina" genéricos, exames já feitos recentemente sem motivo de repetir, nem sugestões vagas tipo "faça check-up completo". Sintomas ou padrões de atividade isolados, sem nenhum apoio nos dados numéricos e sem persistência, também não bastam sozinhos, a menos que sejam claramente compatíveis com uma investigação específica.
 - Se os dados não justificarem nenhum exame novo agora, retorne temSugestoes:false — isso é o resultado esperado na maioria das vezes, não force sugestões para parecer útil.
-- Cada sugestão precisa citar o dado concreto que a motiva (exame, valor, data, medição corporal ou sintoma), mas em UMA frase curta (até ~25 palavras) — sem repetir o histórico inteiro.
+- Cada sugestão precisa citar o dado concreto que a motiva (exame, valor, data, medição corporal, sintoma ou atividade), mas em UMA frase curta (até ~25 palavras) — sem repetir o histórico inteiro.
 - Nunca diagnostique doenças, nunca nomeie uma condição médica como conclusão, nunca cite nomes de medicamentos. Nunca use tom alarmista.
 - No máximo 4 sugestões. Seja extremamente conciso: essa resposta tem um limite curto de tamanho.
 
 Responda APENAS com JSON válido, sem markdown, sem texto antes ou depois, no formato exato (resumo com no máximo 2 frases curtas, motivo com no máximo 1 frase curta):
-{"temSugestoes": true|false, "resumo": "1-2 frases curtas explicando a conclusão geral, mencionando se sintomas influenciaram", "sugestoes": [{"exame": "nome do exame sugerido", "motivo": "1 frase curta baseada em dado(s) concreto(s) — pode combinar exame/corpo/sintoma", "urgencia": "baixa|media|alta"}]}
+{"temSugestoes": true|false, "resumo": "1-2 frases curtas explicando a conclusão geral, mencionando se sintomas ou atividades influenciaram", "sugestoes": [{"exame": "nome do exame sugerido", "motivo": "1 frase curta baseada em dado(s) concreto(s) — pode combinar exame/corpo/sintoma/atividade", "urgencia": "baixa|media|alta"}]}
 
 Responda em português.`;
 }
 
-export function buildTipsPrompt(examSummaryText, bodyHistoryText, symptomsText) {
-  return `Você é um assistente de bem-estar (não substitui um médico e NÃO faz diagnóstico) gerando dicas gerais de estilo de vida para uma pessoa, com base em três fontes de dados combinadas:
+export function buildTipsPrompt(examSummaryText, bodyHistoryText, symptomsText, activitiesText) {
+  return `Você é um assistente de bem-estar (não substitui um médico e NÃO faz diagnóstico) gerando dicas gerais de estilo de vida para uma pessoa, com base em quatro fontes de dados combinadas:
 
 1) Exames alterados ou em atenção nesse laudo:
 ${examSummaryText || "Nenhum exame fora do ideal — todos dentro da normalidade."}
@@ -114,7 +117,10 @@ ${bodyHistoryText || "Nenhuma medição de composição corporal registrada aind
 3) Sintomas relatados pela pessoa (ativos ou já resolvidos):
 ${symptomsText || "Nenhum sintoma relatado."}
 
-Cruze essas três fontes ao montar as dicas — por exemplo, uma tendência de ganho de peso combinada com um exame alterado, ou um sintoma relatado que se conecta a um valor de exame, tornam a dica mais relevante e específica do que olhar cada fonte isoladamente.
+4) Atividades físicas recentes:
+${activitiesText || "Nenhuma atividade física registrada."}
+
+Cruze essas quatro fontes ao montar as dicas — por exemplo, uma tendência de ganho de peso combinada com um exame alterado, um sintoma relatado que se conecta a um valor de exame, ou pouca/nenhuma atividade física registrada apesar de um quadro que se beneficiaria de exercício, tornam a dica mais relevante e específica do que olhar cada fonte isoladamente. Se a pessoa já pratica atividade física com frequência, reconheça isso e ajuste as dicas de acordo (não repita "comece a se exercitar" para quem já treina regularmente).
 
 Regras:
 - Gere de 3 a 6 dicas práticas de estilo de vida (alimentação, sono, exercício, hidratação, acompanhamento médico) em português.
@@ -122,5 +128,5 @@ Regras:
 - Seja direto, sem markdown.
 
 Responda APENAS com JSON válido, sem markdown, sem texto antes ou depois, no formato exato:
-{"resumo":"1-2 frases gerais sobre o quadro, mencionando se sintomas ou composição corporal influenciaram","dicas":["dica 1","dica 2", "..."]}`;
+{"resumo":"1-2 frases gerais sobre o quadro, mencionando se sintomas, composição corporal ou atividade física influenciaram","dicas":["dica 1","dica 2", "..."]}`;
 }

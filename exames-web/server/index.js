@@ -50,6 +50,8 @@ app.delete("/api/profiles/:id", (req, res) => {
   db.prepare("DELETE FROM alerts WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM body_entries WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM symptoms WHERE profile_id = ?").run(id);
+  db.prepare("DELETE FROM tips_history WHERE profile_id = ?").run(id);
+  db.prepare("DELETE FROM activities WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM profiles WHERE id = ?").run(id);
   res.json({ ok: true });
 });
@@ -174,6 +176,74 @@ app.delete("/api/profiles/:profileId/body-entries/:entryId", (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Physical activities (atividades físicas) ----------
+function rowToActivity(r) {
+  return {
+    id: r.id,
+    date: r.date,
+    activityType: r.activity_type,
+    durationMin: r.duration_min,
+    intensity: r.intensity,
+    distanceKm: r.distance_km,
+    caloriesKcal: r.calories_kcal,
+    notes: r.notes,
+    createdAt: r.created_at,
+  };
+}
+
+app.get("/api/profiles/:profileId/activities", (req, res) => {
+  const rows = db
+    .prepare("SELECT * FROM activities WHERE profile_id = ? ORDER BY date ASC, created_at ASC")
+    .all(req.params.profileId);
+  res.json(rows.map(rowToActivity));
+});
+
+app.post("/api/profiles/:profileId/activities", (req, res) => {
+  try {
+    const { profileId } = req.params;
+    const b = req.body || {};
+    if (!b.date) return res.status(400).json({ error: "Data é obrigatória" });
+    if (!b.activityType || !b.activityType.trim()) return res.status(400).json({ error: "Informe o tipo de atividade" });
+    const id = uid();
+    db.prepare(
+      `INSERT INTO activities (id, profile_id, date, activity_type, duration_min, intensity, distance_km, calories_kcal, notes, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`
+    ).run(
+      id, profileId, b.date, b.activityType.trim(),
+      numOrNull(b.durationMin), b.intensity || null, numOrNull(b.distanceKm), numOrNull(b.caloriesKcal),
+      b.notes || "", Date.now()
+    );
+    res.json(rowToActivity(db.prepare("SELECT * FROM activities WHERE id = ?").get(id)));
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao salvar atividade" });
+  }
+});
+
+app.put("/api/profiles/:profileId/activities/:activityId", (req, res) => {
+  try {
+    const { activityId } = req.params;
+    const b = req.body || {};
+    const existing = db.prepare("SELECT id FROM activities WHERE id = ?").get(activityId);
+    if (!existing) return res.status(404).json({ error: "Atividade não encontrada" });
+    if (!b.date) return res.status(400).json({ error: "Data é obrigatória" });
+    if (!b.activityType || !b.activityType.trim()) return res.status(400).json({ error: "Informe o tipo de atividade" });
+    db.prepare(
+      `UPDATE activities SET date=?, activity_type=?, duration_min=?, intensity=?, distance_km=?, calories_kcal=?, notes=? WHERE id=?`
+    ).run(
+      b.date, b.activityType.trim(), numOrNull(b.durationMin), b.intensity || null,
+      numOrNull(b.distanceKm), numOrNull(b.caloriesKcal), b.notes || "", activityId
+    );
+    res.json(rowToActivity(db.prepare("SELECT * FROM activities WHERE id = ?").get(activityId)));
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao atualizar atividade" });
+  }
+});
+
+app.delete("/api/profiles/:profileId/activities/:activityId", (req, res) => {
+  db.prepare("DELETE FROM activities WHERE id = ?").run(req.params.activityId);
+  res.json({ ok: true });
+});
+
 // ---------- AI extraction ----------
 app.post("/api/extract", upload.single("file"), async (req, res) => {
   try {
@@ -241,23 +311,67 @@ app.post("/api/profiles/:profileId/batches", (req, res) => {
 });
 
 // ---------- Tips ----------
-app.post("/api/tips", async (req, res) => {
-  try {
-    const { profileId, results } = req.body || {};
-    const altered = (results || [])
-      .filter((r) => r.status !== "N")
-      .map((r) => `${r.name}: ${r.value} ${r.unit} (ref ${r.ref || "n/d"}) - status ${r.status === "F" ? "fora do ideal" : "atenção"}`);
-    const examSummaryText = altered.length ? altered.join("\n") : "";
-    const bodyHistoryText = profileId ? buildBodyHistoryText(profileId, 5) : "";
-    const symptomsText = profileId ? buildSymptomsText(profileId, 15) : "";
+// ---------- Tips (dicas de saúde combinando exames + composição corporal + sintomas) ----------
+// Guardadas em histórico (tips_history) e só regeneradas quando pedido explicitamente,
+// pra não consumir tokens da API toda vez que a pessoa abrir a tela.
+function getLatestExamSummaryText(profileId) {
+  const batch = db
+    .prepare("SELECT id FROM batches WHERE profile_id = ? ORDER BY date DESC, saved_at DESC LIMIT 1")
+    .get(profileId);
+  if (!batch) return "";
+  const results = db.prepare("SELECT name, value, unit, ref, status FROM results WHERE batch_id = ?").all(batch.id);
+  const altered = results
+    .filter((r) => r.status !== "N")
+    .map((r) => `${r.name}: ${r.value} ${r.unit} (ref ${r.ref || "n/d"}) - status ${r.status === "F" ? "fora do ideal" : "atenção"}`);
+  return altered.join("\n");
+}
 
-    const prompt = buildTipsPrompt(examSummaryText, bodyHistoryText, symptomsText);
+app.get("/api/profiles/:profileId/tips", (req, res) => {
+  const { profileId } = req.params;
+  if (!hasAnyData(profileId)) return res.json({ data: null, stale: false, hasData: false });
+  const latest = db
+    .prepare("SELECT * FROM tips_history WHERE profile_id = ? ORDER BY created_at DESC LIMIT 1")
+    .get(profileId);
+  if (!latest) return res.json({ data: null, stale: true, hasData: true });
+  const stale = latest.signature !== computeSignature(profileId);
+  res.json({
+    data: { resumo: latest.resumo, dicas: JSON.parse(latest.dicas) },
+    stale, hasData: true, createdAt: latest.created_at,
+  });
+});
+
+app.post("/api/profiles/:profileId/tips/generate", async (req, res) => {
+  try {
+    const { profileId } = req.params;
+    if (!hasAnyData(profileId)) {
+      return res.status(400).json({ error: "Adicione ao menos um exame, uma medição de composição corporal, um sintoma ou uma atividade física antes de gerar dicas." });
+    }
+    const examSummaryText = getLatestExamSummaryText(profileId);
+    const bodyHistoryText = buildBodyHistoryText(profileId, 5);
+    const symptomsText = buildSymptomsText(profileId, 15);
+    const activitiesText = buildActivitiesText(profileId, 15);
+    const signature = computeSignature(profileId);
+
+    const prompt = buildTipsPrompt(examSummaryText, bodyHistoryText, symptomsText, activitiesText);
     const text = await callClaude([{ role: "user", content: prompt }], 1200);
     const parsed = repairJson(text);
-    res.json(parsed);
+
+    const id = uid();
+    db.prepare(
+      "INSERT INTO tips_history (id, profile_id, signature, resumo, dicas, created_at) VALUES (?,?,?,?,?,?)"
+    ).run(id, profileId, signature, parsed.resumo || "", JSON.stringify(parsed.dicas || []), Date.now());
+
+    res.json({ data: parsed, stale: false, hasData: true, createdAt: Date.now() });
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao gerar dicas" });
   }
+});
+
+app.get("/api/profiles/:profileId/tips/history", (req, res) => {
+  const rows = db
+    .prepare("SELECT id, resumo, dicas, created_at FROM tips_history WHERE profile_id = ? ORDER BY created_at DESC")
+    .all(req.params.profileId);
+  res.json(rows.map((r) => ({ id: r.id, resumo: r.resumo, dicas: JSON.parse(r.dicas), createdAt: r.created_at })));
 });
 
 // ---------- Alerts (sugestões de novos exames via IA, combinando exames + composição corporal + sintomas) ----------
@@ -272,7 +386,8 @@ function computeSignature(profileId) {
   const batch = latestBatchId(profileId);
   const body = db.prepare("SELECT COUNT(*) c, MAX(saved_at) t FROM body_entries WHERE profile_id = ?").get(profileId);
   const sym = db.prepare("SELECT COUNT(*) c, MAX(created_at) t FROM symptoms WHERE profile_id = ?").get(profileId);
-  return `b:${batch || "-"}|body:${body.c}:${body.t || "-"}|sym:${sym.c}:${sym.t || "-"}`;
+  const act = db.prepare("SELECT COUNT(*) c, MAX(created_at) t FROM activities WHERE profile_id = ?").get(profileId);
+  return `b:${batch || "-"}|body:${body.c}:${body.t || "-"}|sym:${sym.c}:${sym.t || "-"}|act:${act.c}:${act.t || "-"}`;
 }
 
 function hasAnyData(profileId) {
@@ -281,7 +396,26 @@ function hasAnyData(profileId) {
   const body = db.prepare("SELECT 1 FROM body_entries WHERE profile_id = ? LIMIT 1").get(profileId);
   if (body) return true;
   const sym = db.prepare("SELECT 1 FROM symptoms WHERE profile_id = ? LIMIT 1").get(profileId);
-  return !!sym;
+  if (sym) return true;
+  const act = db.prepare("SELECT 1 FROM activities WHERE profile_id = ? LIMIT 1").get(profileId);
+  return !!act;
+}
+
+function buildActivitiesText(profileId, maxEntries = 20) {
+  const rows = db
+    .prepare("SELECT date, activity_type, duration_min, intensity, distance_km, calories_kcal FROM activities WHERE profile_id = ? ORDER BY date ASC, created_at ASC")
+    .all(profileId);
+  const recent = rows.slice(-maxEntries);
+  return recent
+    .map((a) => {
+      const parts = [];
+      if (a.duration_min !== null && a.duration_min !== undefined) parts.push(`${a.duration_min} min`);
+      if (a.intensity) parts.push(`intensidade ${a.intensity}`);
+      if (a.distance_km !== null && a.distance_km !== undefined) parts.push(`${a.distance_km} km`);
+      if (a.calories_kcal !== null && a.calories_kcal !== undefined) parts.push(`${a.calories_kcal} kcal`);
+      return `- ${a.date || "data não informada"}: ${a.activity_type}${parts.length ? " (" + parts.join(", ") + ")" : ""}`;
+    })
+    .join("\n");
 }
 
 function buildExamHistoryText(profileId, maxBatches = 10) {
@@ -351,15 +485,16 @@ app.post("/api/profiles/:profileId/alerts/analyze", async (req, res) => {
   try {
     const { profileId } = req.params;
     if (!hasAnyData(profileId)) {
-      return res.status(400).json({ error: "Adicione ao menos um exame, uma medição de composição corporal ou um sintoma antes de analisar." });
+      return res.status(400).json({ error: "Adicione ao menos um exame, uma medição de composição corporal, um sintoma ou uma atividade física antes de analisar." });
     }
 
     const examHistoryText = buildExamHistoryText(profileId);
     const bodyHistoryText = buildBodyHistoryText(profileId);
     const symptomsText = buildSymptomsText(profileId);
+    const activitiesText = buildActivitiesText(profileId);
     const signature = computeSignature(profileId);
 
-    const prompt = buildAlertsPrompt(examHistoryText, bodyHistoryText, symptomsText);
+    const prompt = buildAlertsPrompt(examHistoryText, bodyHistoryText, symptomsText, activitiesText);
     const text = await callClaude([{ role: "user", content: prompt }], 2000);
     const parsed = repairJson(text);
 
@@ -430,8 +565,12 @@ app.delete("/api/profiles/:profileId/symptoms/:symptomId", (req, res) => {
 app.get("/api/export", (req, res) => {
   try {
     const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, created_at as createdAt FROM profiles").all();
-    const backup = { version: 3, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {} };
+    const backup = { version: 4, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {} };
     for (const p of profiles) {
+      const activityRows = db
+        .prepare("SELECT * FROM activities WHERE profile_id = ? ORDER BY date ASC, created_at ASC")
+        .all(p.id);
+      backup.activities[p.id] = activityRows.map(rowToActivity);
       const symptomRows = db
         .prepare("SELECT * FROM symptoms WHERE profile_id = ? ORDER BY date ASC, created_at ASC")
         .all(p.id);
@@ -466,7 +605,7 @@ app.get("/api/export", (req, res) => {
 // ---------- Import backup ----------
 app.post("/api/import", (req, res) => {
   try {
-    const { profiles, batches, bodyEntries, symptoms } = req.body || {};
+    const { profiles, batches, bodyEntries, symptoms, activities } = req.body || {};
     if (!Array.isArray(profiles)) return res.status(400).json({ error: "Formato de backup inválido." });
 
     let importedProfiles = 0;
@@ -474,6 +613,7 @@ app.post("/api/import", (req, res) => {
     let importedResults = 0;
     let importedBodyEntries = 0;
     let importedSymptoms = 0;
+    let importedActivities = 0;
 
     const existingNames = new Set(db.prepare("SELECT name FROM profiles").all().map((r) => r.name));
 
@@ -536,9 +676,21 @@ app.post("/api/import", (req, res) => {
         ).run(uid(), profileId, s.date || null, s.description || "", s.severity || null, s.status === "resolvido" ? "resolvido" : "ativo", Date.now());
         importedSymptoms++;
       }
+      const activityList = (activities && activities[p.id]) || [];
+      for (const a of activityList) {
+        db.prepare(
+          `INSERT INTO activities (id, profile_id, date, activity_type, duration_min, intensity, distance_km, calories_kcal, notes, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)`
+        ).run(
+          uid(), profileId, a.date || null, a.activityType || "",
+          numOrNull(a.durationMin), a.intensity || null, numOrNull(a.distanceKm), numOrNull(a.caloriesKcal),
+          a.notes || "", Date.now()
+        );
+        importedActivities++;
+      }
     }
 
-    res.json({ ok: true, importedProfiles, importedBatches, importedResults, importedBodyEntries, importedSymptoms });
+    res.json({ ok: true, importedProfiles, importedBatches, importedResults, importedBodyEntries, importedSymptoms, importedActivities });
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao importar backup" });
   }

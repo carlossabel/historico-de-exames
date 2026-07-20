@@ -74,10 +74,34 @@ CREATE TABLE IF NOT EXISTS symptoms (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS tips_history (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL,
+  signature TEXT,
+  resumo TEXT,
+  dicas TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS activities (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL,
+  date TEXT,
+  activity_type TEXT NOT NULL,
+  duration_min REAL,
+  intensity TEXT,
+  distance_km REAL,
+  calories_kcal REAL,
+  notes TEXT,
+  created_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_batches_profile ON batches(profile_id);
 CREATE INDEX IF NOT EXISTS idx_results_batch ON results(batch_id);
 CREATE INDEX IF NOT EXISTS idx_body_entries_profile ON body_entries(profile_id);
 CREATE INDEX IF NOT EXISTS idx_symptoms_profile ON symptoms(profile_id);
+CREATE INDEX IF NOT EXISTS idx_tips_history_profile ON tips_history(profile_id);
+CREATE INDEX IF NOT EXISTS idx_activities_profile ON activities(profile_id);
 `);
 
 // Migração leve: bancos criados antes dos sintomas/composição corporal só tinham

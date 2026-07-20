@@ -3,7 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
-  FileUp, Download, Bell, Weight, Pencil, Stethoscope,
+  FileUp, Download, Bell, Weight, Pencil, Stethoscope, Dumbbell,
 } from "lucide-react";
 import * as api from "./api.js";
 
@@ -497,11 +497,19 @@ function ProfileScreen({ profile, onBack }) {
         >
           Sintomas
         </button>
+        <button
+          onClick={() => setTab("atividades")}
+          className={`text-sm px-3 py-2 border-b-2 -mb-px ${tab === "atividades" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+        >
+          Atividades
+        </button>
       </div>
 
       {tab === "corpo" && <BodyCompositionScreen profileId={profile.id} />}
 
       {tab === "sintomas" && <SymptomsScreen profileId={profile.id} />}
+
+      {tab === "atividades" && <ActivitiesScreen profileId={profile.id} />}
 
       {tab === "exames" && (
       <>
@@ -557,7 +565,6 @@ function ProfileScreen({ profile, onBack }) {
 
       {tipsOpen && latestBatch && (
         <TipsModal
-          results={latestBatch.results}
           profileId={profile.id}
           alertsInfo={alertsInfo}
           onAlertsChange={setAlertsInfo}
@@ -842,24 +849,49 @@ const URGENCY_META = {
 
 const COMBINED_DISCLAIMER = "As dicas e as sugestões de exames acima são geradas por IA a partir dos seus resultados e servem como ponto de partida — não substituem uma avaliação médica. Leve esses resultados a um médico para interpretação e conduta.";
 
-function TipsModal({ results, profileId, alertsInfo, onAlertsChange, onClose }) {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [tips, setTips] = useState(null);
+function TipsModal({ profileId, alertsInfo, onAlertsChange, onClose }) {
+  const [tipsInfo, setTipsInfo] = useState(null);
+  const [loadingTips, setLoadingTips] = useState(true);
+  const [generatingTips, setGeneratingTips] = useState(false);
+  const [tipsError, setTipsError] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState(null);
+
   const [analyzing, setAnalyzing] = useState(false);
   const [alertsError, setAlertsError] = useState(null);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        setTips(await api.getTips(profileId, results));
-      } catch (e) {
-        setError("Não consegui gerar as dicas agora. Tente novamente em instantes.");
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [results, profileId]);
+  const loadTips = useCallback(async () => {
+    try {
+      setTipsInfo(await api.getTips(profileId));
+    } catch (e) {
+      setTipsError(e.message || "Não consegui carregar as dicas.");
+    } finally {
+      setLoadingTips(false);
+    }
+  }, [profileId]);
+
+  useEffect(() => { loadTips(); }, [loadTips]);
+
+  const runGenerateTips = async () => {
+    setGeneratingTips(true);
+    setTipsError(null);
+    try {
+      const data = await api.generateTips(profileId);
+      setTipsInfo(data);
+      if (historyOpen) setHistory(await api.getTipsHistory(profileId));
+    } catch (e) {
+      setTipsError(e.message || "Não consegui gerar as dicas agora.");
+    } finally {
+      setGeneratingTips(false);
+    }
+  };
+
+  const toggleHistory = async () => {
+    if (!historyOpen && history === null) {
+      setHistory(await api.getTipsHistory(profileId));
+    }
+    setHistoryOpen((v) => !v);
+  };
 
   const runAnalyze = async () => {
     setAnalyzing(true);
@@ -874,107 +906,175 @@ function TipsModal({ results, profileId, alertsInfo, onAlertsChange, onClose }) 
     }
   };
 
+  const hasTipsData = tipsInfo ? tipsInfo.hasData : true;
+  const tips = tipsInfo?.data || null;
+  const tipsStale = !!tipsInfo?.stale;
+
   const hasData = alertsInfo ? alertsInfo.hasData : true;
   const alertsData = alertsInfo?.data || null;
   const stale = !!alertsInfo?.stale;
 
   return (
     <ModalShell onClose={onClose} title="Dicas de saúde" wide>
-      {loading && (
+      {loadingTips && (
         <div className="flex items-center gap-2 text-slate-400 text-sm py-8 justify-center">
-          <Loader2 size={16} className="animate-spin" /> Analisando os exames...
+          <Loader2 size={16} className="animate-spin" /> Carregando...
         </div>
       )}
-      {error && <div className="text-sm text-red-600 flex items-center gap-2 mb-4"><AlertTriangle size={15} /> {error}</div>}
-      {tips && (
+
+      {!loadingTips && !hasTipsData && (
+        <p className="text-sm text-slate-500 mb-4">Adicione ao menos um exame, uma medição de composição corporal, um sintoma ou uma atividade física para gerar dicas.</p>
+      )}
+
+      {!loadingTips && hasTipsData && !tips && !generatingTips && (
+        <div className="mb-4">
+          <p className="text-sm text-slate-500 mb-3">
+            A IA pode gerar dicas de estilo de vida cruzando exames, composição corporal, sintomas relatados e atividades físicas. As dicas
+            ficam guardadas — ela só é chamada de novo quando você pedir, pra não gastar tokens à toa.
+          </p>
+          <button onClick={runGenerateTips} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800">
+            Gerar dicas agora
+          </button>
+        </div>
+      )}
+
+      {generatingTips && (
+        <div className="flex items-center gap-2 text-slate-400 text-sm py-8 justify-center">
+          <Loader2 size={16} className="animate-spin" /> Gerando dicas...
+        </div>
+      )}
+
+      {tipsError && (
+        <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {tipsError}
+        </div>
+      )}
+
+      {tips && !generatingTips && (
         <div>
+          {tipsStale && (
+            <div className="mb-3 flex items-center justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              <span className="flex items-center gap-1.5"><Info size={13} /> Há dados novos desde a última geração.</span>
+              <button onClick={runGenerateTips} className="underline whitespace-nowrap shrink-0">Gerar de novo</button>
+            </div>
+          )}
+          <p className="text-xs text-slate-400 mb-2">
+            Gerado em {new Date(tipsInfo.createdAt).toLocaleDateString("pt-BR")}
+          </p>
           <p className="text-sm text-slate-700 mb-4">{tips.resumo}</p>
-          <ul className="space-y-2 mb-5">
+          <ul className="space-y-2 mb-3">
             {(tips.dicas || []).map((d, i) => (
               <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
                 <CheckCircle2 size={15} className="text-emerald-500 mt-0.5 shrink-0" /> {d}
               </li>
             ))}
           </ul>
-        </div>
-      )}
-
-      {!loading && (
-        <div className="border-t border-slate-100 pt-4 mt-1">
-          <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-1.5">
-            <Bell size={12} /> Sugestão de novos exames
-          </p>
-
-          {!hasData && (
-            <p className="text-sm text-slate-500">Adicione ao menos um exame, uma medição de composição corporal ou um sintoma para essa pessoa antes de pedir uma análise.</p>
-          )}
-
-          {hasData && !alertsData && !analyzing && (
-            <div>
-              <p className="text-sm text-slate-500 mb-3">
-                A IA pode cruzar exames, composição corporal e sintomas relatados para dizer se algum exame novo faz
-                sentido pedir — só sugere quando há um motivo real nos dados, não fica pedindo exame à toa.
-              </p>
-              <button onClick={runAnalyze} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800">
-                Analisar agora
+          <div className="flex items-center gap-3 mb-2">
+            {!tipsStale && (
+              <button onClick={runGenerateTips} className="text-xs text-slate-500 hover:text-slate-800 underline">
+                Gerar de novo
               </button>
-            </div>
-          )}
+            )}
+            <button onClick={toggleHistory} className="text-xs text-slate-500 hover:text-slate-800 underline">
+              {historyOpen ? "Ocultar histórico" : "Ver histórico de dicas anteriores"}
+            </button>
+          </div>
 
-          {analyzing && (
-            <div className="flex items-center gap-2 text-slate-400 text-sm py-4 justify-center">
-              <Loader2 size={16} className="animate-spin" /> Analisando o histórico de exames...
-            </div>
-          )}
-
-          {alertsError && (
-            <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
-              <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {alertsError}
-            </div>
-          )}
-
-          {alertsData && !analyzing && (
-            <div>
-              {stale && (
-                <div className="mb-3 flex items-center justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  <span className="flex items-center gap-1.5"><Info size={13} /> Há laudos novos desde a última análise.</span>
-                  <button onClick={runAnalyze} className="underline whitespace-nowrap shrink-0">Atualizar análise</button>
+          {historyOpen && (
+            <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 mb-2">
+              {history === null ? (
+                <div className="flex items-center gap-2 text-slate-400 text-xs py-3 justify-center">
+                  <Loader2 size={13} className="animate-spin" /> Carregando histórico...
                 </div>
-              )}
-
-              <p className="text-sm text-slate-700 mb-3">{alertsData.resumo}</p>
-
-              {alertsData.temSugestoes && (alertsData.sugestoes || []).length > 0 ? (
-                <ul className="space-y-3 mb-2">
-                  {alertsData.sugestoes.map((s, i) => {
-                    const meta = URGENCY_META[s.urgencia] || URGENCY_META.baixa;
-                    return (
-                      <li key={i} className="border border-slate-200 rounded-lg p-3">
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <p className="text-sm font-medium text-slate-900">{s.exame}</p>
-                          <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${meta.chip}`}>{meta.label}</span>
-                        </div>
-                        <p className="text-xs text-slate-500">{s.motivo}</p>
-                      </li>
-                    );
-                  })}
-                </ul>
+              ) : history.length <= 1 ? (
+                <p className="text-xs text-slate-400 px-3 py-2">Ainda não há gerações anteriores.</p>
               ) : (
-                <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5 mb-2 text-sm">
-                  <CheckCircle2 size={16} className="shrink-0" />
-                  Nada no histórico justifica pedir exames novos agora.
-                </div>
-              )}
-
-              {!stale && (
-                <button onClick={runAnalyze} className="text-xs text-slate-500 hover:text-slate-800 underline">
-                  Analisar de novo
-                </button>
+                history.slice(1).map((h) => (
+                  <div key={h.id} className="px-3 py-2">
+                    <p className="text-xs text-slate-400 mb-1">{new Date(h.createdAt).toLocaleDateString("pt-BR")}</p>
+                    <p className="text-xs text-slate-600">{h.resumo}</p>
+                  </div>
+                ))
               )}
             </div>
           )}
         </div>
       )}
+
+      <div className="border-t border-slate-100 pt-4 mt-3">
+        <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-1.5">
+          <Bell size={12} /> Sugestão de novos exames
+        </p>
+
+        {!hasData && (
+          <p className="text-sm text-slate-500">Adicione ao menos um exame, uma medição de composição corporal, um sintoma ou uma atividade física para essa pessoa antes de pedir uma análise.</p>
+        )}
+
+        {hasData && !alertsData && !analyzing && (
+          <div>
+            <p className="text-sm text-slate-500 mb-3">
+              A IA pode cruzar exames, composição corporal, sintomas relatados e atividades físicas para dizer se algum exame novo faz
+              sentido pedir — só sugere quando há um motivo real nos dados, não fica pedindo exame à toa.
+            </p>
+            <button onClick={runAnalyze} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800">
+              Analisar agora
+            </button>
+          </div>
+        )}
+
+        {analyzing && (
+          <div className="flex items-center gap-2 text-slate-400 text-sm py-4 justify-center">
+            <Loader2 size={16} className="animate-spin" /> Analisando o histórico...
+          </div>
+        )}
+
+        {alertsError && (
+          <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+            <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {alertsError}
+          </div>
+        )}
+
+        {alertsData && !analyzing && (
+          <div>
+            {stale && (
+              <div className="mb-3 flex items-center justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <span className="flex items-center gap-1.5"><Info size={13} /> Há dados novos desde a última análise.</span>
+                <button onClick={runAnalyze} className="underline whitespace-nowrap shrink-0">Atualizar análise</button>
+              </div>
+            )}
+
+            <p className="text-sm text-slate-700 mb-3">{alertsData.resumo}</p>
+
+            {alertsData.temSugestoes && (alertsData.sugestoes || []).length > 0 ? (
+              <ul className="space-y-3 mb-2">
+                {alertsData.sugestoes.map((s, i) => {
+                  const meta = URGENCY_META[s.urgencia] || URGENCY_META.baixa;
+                  return (
+                    <li key={i} className="border border-slate-200 rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <p className="text-sm font-medium text-slate-900">{s.exame}</p>
+                        <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${meta.chip}`}>{meta.label}</span>
+                      </div>
+                      <p className="text-xs text-slate-500">{s.motivo}</p>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5 mb-2 text-sm">
+                <CheckCircle2 size={16} className="shrink-0" />
+                Nada no histórico justifica pedir exames novos agora.
+              </div>
+            )}
+
+            {!stale && (
+              <button onClick={runAnalyze} className="text-xs text-slate-500 hover:text-slate-800 underline">
+                Analisar de novo
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
       <div className="flex items-start gap-2 text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 mt-4">
         <Info size={13} className="mt-0.5 shrink-0" /> {COMBINED_DISCLAIMER}
@@ -1446,6 +1546,233 @@ function SymptomModal({ entry, onCancel, onSave }) {
         >
           {saving && <Loader2 size={14} className="animate-spin" />}
           {saving ? "Salvando..." : "Salvar sintoma"}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+const ACTIVITY_INTENSITY_META = {
+  leve: { label: "Leve", chip: "bg-slate-100 text-slate-600" },
+  moderada: { label: "Moderada", chip: "bg-amber-100 text-amber-700" },
+  intensa: { label: "Intensa", chip: "bg-red-100 text-red-700" },
+};
+
+function daysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+function ActivitiesScreen({ profileId }) {
+  const [activities, setActivities] = useState(null);
+  const [formEntry, setFormEntry] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  const load = useCallback(async () => {
+    setActivities(await api.getActivities(profileId));
+  }, [profileId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const saveActivity = async (payload) => {
+    if (payload.id) {
+      await api.updateActivity(profileId, payload.id, payload);
+    } else {
+      await api.createActivity(profileId, payload);
+    }
+    setFormEntry(null);
+    await load();
+  };
+
+  const removeActivity = async (id) => {
+    await api.deleteActivity(profileId, id);
+    setConfirmDelete(null);
+    await load();
+  };
+
+  if (activities === null) {
+    return <div className="flex justify-center py-16 text-slate-400"><Loader2 className="animate-spin" size={22} /></div>;
+  }
+
+  const ordered = activities.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const weekStart = daysAgo(6);
+  const last7 = activities.filter((a) => (a.date || "") >= weekStart);
+  const weekMinutes = last7.reduce((sum, a) => sum + (a.durationMin || 0), 0);
+  const weekSessions = last7.length;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-slate-500">
+          {activities.length} atividade{activities.length !== 1 ? "s" : ""} registrada{activities.length !== 1 ? "s" : ""}
+        </p>
+        <button
+          onClick={() => setFormEntry({ date: new Date().toISOString().slice(0, 10), activityType: "", durationMin: "", intensity: "", distanceKm: "", caloriesKcal: "", notes: "" })}
+          className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800"
+        >
+          <Plus size={15} /> Nova atividade
+        </button>
+      </div>
+
+      {activities.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 mb-6">
+          <div className="bg-slate-50 rounded-xl p-4">
+            <p className="text-xs text-slate-500 mb-1">Sessões nos últimos 7 dias</p>
+            <p className="text-xl font-medium text-slate-900">{weekSessions}</p>
+          </div>
+          <div className="bg-slate-50 rounded-xl p-4">
+            <p className="text-xs text-slate-500 mb-1">Minutos nos últimos 7 dias</p>
+            <p className="text-xl font-medium text-slate-900">{weekMinutes}</p>
+          </div>
+        </div>
+      )}
+
+      {activities.length === 0 ? (
+        <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
+          <Dumbbell size={28} className="mx-auto mb-2" />
+          <p className="text-sm">Nenhuma atividade registrada ainda.</p>
+        </div>
+      ) : (
+        <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
+          {ordered.map((a) => {
+            const intMeta = a.intensity ? ACTIVITY_INTENSITY_META[a.intensity] : null;
+            return (
+              <div key={a.id} className="flex items-start justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                    <span className="text-sm text-slate-800 font-medium">{fmtDate(a.date)}</span>
+                    <span className="text-sm text-slate-700">{a.activityType}</span>
+                    {intMeta && <span className={`text-xs px-2 py-0.5 rounded-full ${intMeta.chip}`}>{intMeta.label}</span>}
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    {[
+                      a.durationMin !== null && a.durationMin !== undefined ? `${a.durationMin} min` : null,
+                      a.distanceKm !== null && a.distanceKm !== undefined ? `${a.distanceKm} km` : null,
+                      a.caloriesKcal !== null && a.caloriesKcal !== undefined ? `${a.caloriesKcal} kcal` : null,
+                    ].filter(Boolean).join(" · ")}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => setFormEntry(a)} className="text-slate-300 hover:text-slate-700 p-1.5" aria-label="Editar atividade">
+                    <Pencil size={14} />
+                  </button>
+                  <button onClick={() => setConfirmDelete(a)} className="text-slate-300 hover:text-red-500 p-1.5" aria-label="Excluir atividade">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {formEntry && <ActivityModal entry={formEntry} onCancel={() => setFormEntry(null)} onSave={saveActivity} />}
+
+      {confirmDelete && (
+        <ConfirmModal
+          title="Excluir esta atividade?"
+          message="O registro dessa atividade física será removido do histórico."
+          confirmLabel="Excluir"
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => removeActivity(confirmDelete.id)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ActivityModal({ entry, onCancel, onSave }) {
+  const [form, setForm] = useState({
+    date: entry.date || new Date().toISOString().slice(0, 10),
+    activityType: entry.activityType || "",
+    durationMin: entry.durationMin ?? "",
+    intensity: entry.intensity || "",
+    distanceKm: entry.distanceKm ?? "",
+    caloriesKcal: entry.caloriesKcal ?? "",
+    notes: entry.notes || "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const setField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+
+  const handleSave = async () => {
+    if (!form.date || !form.activityType.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave({ ...form, id: entry.id });
+    } catch (e) {
+      setError(e.message || "Erro ao salvar atividade.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell onClose={onCancel} title={entry.id ? "Editar atividade" : "Nova atividade"} wide>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Data</label>
+          <input type="date" value={form.date} onChange={(e) => setField("date", e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Tipo de atividade</label>
+          <input
+            autoFocus
+            value={form.activityType}
+            onChange={(e) => setField("activityType", e.target.value)}
+            placeholder="Ex: Corrida, Musculação, Yoga..."
+            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Duração (min)</label>
+          <input type="number" step="1" value={form.durationMin} onChange={(e) => setField("durationMin", e.target.value)} placeholder="Opcional" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Intensidade</label>
+          <select value={form.intensity} onChange={(e) => setField("intensity", e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+            <option value="">Não informar</option>
+            <option value="leve">Leve</option>
+            <option value="moderada">Moderada</option>
+            <option value="intensa">Intensa</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Distância (km)</label>
+          <input type="number" step="0.1" value={form.distanceKm} onChange={(e) => setField("distanceKm", e.target.value)} placeholder="Opcional" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Calorias (kcal)</label>
+          <input type="number" step="1" value={form.caloriesKcal} onChange={(e) => setField("caloriesKcal", e.target.value)} placeholder="Opcional" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+        </div>
+      </div>
+
+      <div className="mb-4">
+        <label className="text-xs text-slate-500 mb-1 block">Notas (opcional)</label>
+        <textarea value={form.notes} onChange={(e) => setField("notes", e.target.value)} rows={2} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm resize-none" />
+      </div>
+
+      {error && (
+        <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2">
+        <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
+        <button
+          disabled={!form.date || !form.activityType.trim() || saving}
+          onClick={handleSave}
+          className="flex items-center gap-1.5 text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
+        >
+          {saving && <Loader2 size={14} className="animate-spin" />}
+          {saving ? "Salvando..." : "Salvar atividade"}
         </button>
       </div>
     </ModalShell>
