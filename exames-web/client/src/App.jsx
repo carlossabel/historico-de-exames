@@ -3,7 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
-  FileUp, Download, Bell,
+  FileUp, Download, Bell, Weight, Pencil, Stethoscope,
 } from "lucide-react";
 import * as api from "./api.js";
 
@@ -67,6 +67,32 @@ function fmtDate(d) {
     if (y && m && day) return `${day}/${m}/${y}`;
   } catch (e) {}
   return d;
+}
+
+const BODY_INDICATORS = [
+  { key: "weightKg", label: "Peso", unit: "kg", decimals: 1 },
+  { key: "imc", label: "IMC", unit: "", decimals: 1, computed: true },
+  { key: "bodyFatPct", label: "Gordura corporal", unit: "%", decimals: 1 },
+  { key: "muscleMassKg", label: "Massa muscular", unit: "kg", decimals: 1 },
+  { key: "visceralFat", label: "Gordura visceral", unit: "", decimals: 0 },
+  { key: "boneMassKg", label: "Massa óssea", unit: "kg", decimals: 2 },
+  { key: "bodyWaterPct", label: "Água corporal", unit: "%", decimals: 1 },
+  { key: "bmrKcal", label: "Taxa metabólica basal", unit: "kcal", decimals: 0 },
+  { key: "heightCm", label: "Altura", unit: "cm", decimals: 1 },
+];
+
+function withImc(entries) {
+  let lastHeight = null;
+  return entries.map((e) => {
+    if (e.heightCm !== null && e.heightCm !== undefined) lastHeight = e.heightCm;
+    const imc = e.weightKg && lastHeight ? Math.round((e.weightKg / ((lastHeight / 100) ** 2)) * 10) / 10 : null;
+    return { ...e, imc };
+  });
+}
+
+function fmtNum(v, decimals = 1) {
+  if (v === null || v === undefined) return "—";
+  return Number(v).toLocaleString("pt-BR", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
 export default function App() {
@@ -336,8 +362,7 @@ function ProfileScreen({ profile, onBack }) {
   const [tipsOpen, setTipsOpen] = useState(false);
   const [selectedExam, setSelectedExam] = useState(null);
   const [alertsInfo, setAlertsInfo] = useState(null);
-  const [alertsOpen, setAlertsOpen] = useState(false);
-  const [analyzing, setAnalyzing] = useState(false);
+  const [tab, setTab] = useState("exames");
   const fileInputRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -358,18 +383,6 @@ function ProfileScreen({ profile, onBack }) {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { refreshAlerts(); }, [refreshAlerts]);
-
-  const runAnalyze = async () => {
-    setAnalyzing(true);
-    try {
-      const data = await api.analyzeAlerts(profile.id);
-      setAlertsInfo(data);
-    } catch (e) {
-      setAlertsInfo((prev) => ({ ...(prev || {}), error: e.message || "Erro ao analisar histórico." }));
-    } finally {
-      setAnalyzing(false);
-    }
-  };
 
   const handleFile = async (file) => {
     setUploadError(null);
@@ -446,7 +459,7 @@ function ProfileScreen({ profile, onBack }) {
         <ArrowLeft size={15} /> Perfis
       </button>
 
-      <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
+      <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <div className={`w-11 h-11 rounded-full ${c.bg} ${c.text} flex items-center justify-center font-medium text-sm`}>{initials(profile.name)}</div>
           <div>
@@ -454,26 +467,44 @@ function ProfileScreen({ profile, onBack }) {
             <p className="text-xs text-slate-400">{index.length} laudo{index.length !== 1 ? "s" : ""} no histórico</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setAlertsOpen(true)}
-            className="relative text-slate-500 hover:text-slate-800 border border-slate-200 rounded-lg p-2 hover:bg-slate-50"
-            aria-label="Sugestões de novos exames"
-            title="Sugestões de novos exames"
-          >
-            <Bell size={17} />
-            {hasSuggestions && (
-              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 ring-2 ring-white" />
-            )}
-          </button>
-          <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
-          <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
-            {uploading ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
-            {uploading ? "Lendo PDF..." : "Enviar PDF de exame"}
-          </button>
-        </div>
+        {tab === "exames" && (
+          <div className="flex items-center gap-2">
+            <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
+            <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
+              {uploading ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+              {uploading ? "Lendo PDF..." : "Enviar PDF de exame"}
+            </button>
+          </div>
+        )}
       </div>
 
+      <div className="flex items-center gap-1 mb-6 border-b border-slate-200">
+        <button
+          onClick={() => setTab("exames")}
+          className={`text-sm px-3 py-2 border-b-2 -mb-px ${tab === "exames" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+        >
+          Exames
+        </button>
+        <button
+          onClick={() => setTab("corpo")}
+          className={`text-sm px-3 py-2 border-b-2 -mb-px ${tab === "corpo" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+        >
+          Composição corporal
+        </button>
+        <button
+          onClick={() => setTab("sintomas")}
+          className={`text-sm px-3 py-2 border-b-2 -mb-px ${tab === "sintomas" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+        >
+          Sintomas
+        </button>
+      </div>
+
+      {tab === "corpo" && <BodyCompositionScreen profileId={profile.id} />}
+
+      {tab === "sintomas" && <SymptomsScreen profileId={profile.id} />}
+
+      {tab === "exames" && (
+      <>
       {uploadError && (
         <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
@@ -490,7 +521,7 @@ function ProfileScreen({ profile, onBack }) {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
           <ScoreCard score={latestScore} trend={trend} />
           <CountCard label="Última coleta" value={fmtDate(latestBatch.date)} sub={latestBatch.lab || "Laboratório não informado"} />
-          <TipsCard onOpen={() => setTipsOpen(true)} />
+          <TipsCard onOpen={() => setTipsOpen(true)} hasSuggestions={hasSuggestions} />
         </div>
       )}
 
@@ -524,15 +555,16 @@ function ProfileScreen({ profile, onBack }) {
 
       {reviewData && <ReviewModal data={reviewData} onCancel={() => setReviewData(null)} onConfirm={saveBatch} />}
 
-      {tipsOpen && latestBatch && <TipsModal results={latestBatch.results} onClose={() => setTipsOpen(false)} />}
-
-      {alertsOpen && (
-        <AlertsModal
-          info={alertsInfo}
-          analyzing={analyzing}
-          onAnalyze={runAnalyze}
-          onClose={() => setAlertsOpen(false)}
+      {tipsOpen && latestBatch && (
+        <TipsModal
+          results={latestBatch.results}
+          profileId={profile.id}
+          alertsInfo={alertsInfo}
+          onAlertsChange={setAlertsInfo}
+          onClose={() => setTipsOpen(false)}
         />
+      )}
+      </>
       )}
     </div>
   );
@@ -564,12 +596,15 @@ function CountCard({ label, value, sub }) {
     </div>
   );
 }
-function TipsCard({ onOpen }) {
+function TipsCard({ onOpen, hasSuggestions }) {
   return (
-    <button onClick={onOpen} className="bg-slate-50 rounded-xl p-4 text-left hover:bg-slate-100 transition">
+    <button onClick={onOpen} className="relative bg-slate-50 rounded-xl p-4 text-left hover:bg-slate-100 transition">
       <p className="text-xs text-slate-500 mb-1 flex items-center gap-1"><Sparkles size={12} /> Dicas de saúde</p>
       <p className="text-sm font-medium text-slate-900">Ver orientações</p>
       <p className="text-xs text-slate-400 mt-0.5">Baseado nos últimos exames</p>
+      {hasSuggestions && (
+        <span className="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-red-500 ring-2 ring-slate-50" title="Há sugestão de novo exame" />
+      )}
     </button>
   );
 }
@@ -799,12 +834,20 @@ function ReviewModal({ data, onCancel, onConfirm }) {
   );
 }
 
-const TIPS_DISCLAIMER = "Essas orientações são gerais, geradas a partir dos valores dos exames, e não substituem uma avaliação médica. Leve esses resultados a um médico para interpretação e conduta.";
+const URGENCY_META = {
+  baixa: { label: "Baixa", chip: "bg-slate-100 text-slate-600" },
+  media: { label: "Média", chip: "bg-amber-100 text-amber-700" },
+  alta: { label: "Alta", chip: "bg-red-100 text-red-700" },
+};
 
-function TipsModal({ results, onClose }) {
+const COMBINED_DISCLAIMER = "As dicas e as sugestões de exames acima são geradas por IA a partir dos seus resultados e servem como ponto de partida — não substituem uma avaliação médica. Leve esses resultados a um médico para interpretação e conduta.";
+
+function TipsModal({ results, profileId, alertsInfo, onAlertsChange, onClose }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [tips, setTips] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [alertsError, setAlertsError] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -818,18 +861,35 @@ function TipsModal({ results, onClose }) {
     })();
   }, [results]);
 
+  const runAnalyze = async () => {
+    setAnalyzing(true);
+    setAlertsError(null);
+    try {
+      const data = await api.analyzeAlerts(profileId);
+      onAlertsChange(data);
+    } catch (e) {
+      setAlertsError(e.message || "Erro ao analisar histórico.");
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const hasData = alertsInfo ? alertsInfo.hasData : true;
+  const alertsData = alertsInfo?.data || null;
+  const stale = !!alertsInfo?.stale;
+
   return (
-    <ModalShell onClose={onClose} title="Dicas de saúde">
+    <ModalShell onClose={onClose} title="Dicas de saúde" wide>
       {loading && (
         <div className="flex items-center gap-2 text-slate-400 text-sm py-8 justify-center">
           <Loader2 size={16} className="animate-spin" /> Analisando os exames...
         </div>
       )}
-      {error && <div className="text-sm text-red-600 flex items-center gap-2"><AlertTriangle size={15} /> {error}</div>}
+      {error && <div className="text-sm text-red-600 flex items-center gap-2 mb-4"><AlertTriangle size={15} /> {error}</div>}
       {tips && (
         <div>
           <p className="text-sm text-slate-700 mb-4">{tips.resumo}</p>
-          <ul className="space-y-2 mb-4">
+          <ul className="space-y-2 mb-5">
             {(tips.dicas || []).map((d, i) => (
               <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
                 <CheckCircle2 size={15} className="text-emerald-500 mt-0.5 shrink-0" /> {d}
@@ -838,54 +898,341 @@ function TipsModal({ results, onClose }) {
           </ul>
         </div>
       )}
-      <div className="flex items-start gap-2 text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 mt-2">
-        <Info size={13} className="mt-0.5 shrink-0" /> {TIPS_DISCLAIMER}
+
+      {!loading && (
+        <div className="border-t border-slate-100 pt-4 mt-1">
+          <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-1.5">
+            <Bell size={12} /> Sugestão de novos exames
+          </p>
+
+          {!hasData && (
+            <p className="text-sm text-slate-500">Adicione ao menos um exame, uma medição de composição corporal ou um sintoma para essa pessoa antes de pedir uma análise.</p>
+          )}
+
+          {hasData && !alertsData && !analyzing && (
+            <div>
+              <p className="text-sm text-slate-500 mb-3">
+                A IA pode cruzar exames, composição corporal e sintomas relatados para dizer se algum exame novo faz
+                sentido pedir — só sugere quando há um motivo real nos dados, não fica pedindo exame à toa.
+              </p>
+              <button onClick={runAnalyze} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800">
+                Analisar agora
+              </button>
+            </div>
+          )}
+
+          {analyzing && (
+            <div className="flex items-center gap-2 text-slate-400 text-sm py-4 justify-center">
+              <Loader2 size={16} className="animate-spin" /> Analisando o histórico de exames...
+            </div>
+          )}
+
+          {alertsError && (
+            <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {alertsError}
+            </div>
+          )}
+
+          {alertsData && !analyzing && (
+            <div>
+              {stale && (
+                <div className="mb-3 flex items-center justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <span className="flex items-center gap-1.5"><Info size={13} /> Há laudos novos desde a última análise.</span>
+                  <button onClick={runAnalyze} className="underline whitespace-nowrap shrink-0">Atualizar análise</button>
+                </div>
+              )}
+
+              <p className="text-sm text-slate-700 mb-3">{alertsData.resumo}</p>
+
+              {alertsData.temSugestoes && (alertsData.sugestoes || []).length > 0 ? (
+                <ul className="space-y-3 mb-2">
+                  {alertsData.sugestoes.map((s, i) => {
+                    const meta = URGENCY_META[s.urgencia] || URGENCY_META.baixa;
+                    return (
+                      <li key={i} className="border border-slate-200 rounded-lg p-3">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <p className="text-sm font-medium text-slate-900">{s.exame}</p>
+                          <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${meta.chip}`}>{meta.label}</span>
+                        </div>
+                        <p className="text-xs text-slate-500">{s.motivo}</p>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5 mb-2 text-sm">
+                  <CheckCircle2 size={16} className="shrink-0" />
+                  Nada no histórico justifica pedir exames novos agora.
+                </div>
+              )}
+
+              {!stale && (
+                <button onClick={runAnalyze} className="text-xs text-slate-500 hover:text-slate-800 underline">
+                  Analisar de novo
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex items-start gap-2 text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 mt-4">
+        <Info size={13} className="mt-0.5 shrink-0" /> {COMBINED_DISCLAIMER}
       </div>
     </ModalShell>
   );
 }
 
-const ALERTS_DISCLAIMER = "Essas sugestões são geradas por IA a partir do histórico de exames e servem só como ponto de partida para conversar com um médico — não são uma indicação médica definitiva.";
-const URGENCY_META = {
-  baixa: { label: "Baixa", chip: "bg-slate-100 text-slate-600" },
-  media: { label: "Média", chip: "bg-amber-100 text-amber-700" },
-  alta: { label: "Alta", chip: "bg-red-100 text-red-700" },
-};
+function BodyCompositionScreen({ profileId }) {
+  const [entries, setEntries] = useState(null);
+  const [formEntry, setFormEntry] = useState(null); // { ...entry } when editing, {} when adding new, null when closed
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [selectedIndicator, setSelectedIndicator] = useState("weightKg");
 
-function AlertsModal({ info, analyzing, onAnalyze, onClose }) {
-  const hasBatches = info ? info.hasBatches : true;
-  const data = info?.data || null;
-  const stale = !!info?.stale;
-  const error = info?.error;
+  const load = useCallback(async () => {
+    const rows = await api.getBodyEntries(profileId);
+    setEntries(rows);
+  }, [profileId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const saveEntry = async (payload) => {
+    if (payload.id) {
+      await api.updateBodyEntry(profileId, payload.id, payload);
+    } else {
+      await api.createBodyEntry(profileId, payload);
+    }
+    setFormEntry(null);
+    await load();
+  };
+
+  const removeEntry = async (entryId) => {
+    await api.deleteBodyEntry(profileId, entryId);
+    setConfirmDelete(null);
+    await load();
+  };
+
+  if (entries === null) {
+    return <div className="flex justify-center py-16 text-slate-400"><Loader2 className="animate-spin" size={22} /></div>;
+  }
+
+  const withImcEntries = withImc(entries);
+  const latest = withImcEntries.length ? withImcEntries[withImcEntries.length - 1] : null;
+  const prev = withImcEntries.length > 1 ? withImcEntries[withImcEntries.length - 2] : null;
+
+  const summaryKeys = ["weightKg", "imc", "bodyFatPct", "muscleMassKg"];
 
   return (
-    <ModalShell onClose={onClose} title="Sugestões de novos exames" wide>
-      {!hasBatches && (
-        <p className="text-sm text-slate-500 mb-2">
-          Envie pelo menos um laudo de exame para essa pessoa antes de pedir uma análise.
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-slate-500">
+          {entries.length} mediç{entries.length !== 1 ? "ões" : "ão"} registrada{entries.length !== 1 ? "s" : ""}
         </p>
+        <button
+          onClick={() => setFormEntry({ date: new Date().toISOString().slice(0, 10), heightCm: latest?.heightCm ?? "" })}
+          className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800"
+        >
+          <Plus size={15} /> Nova medição
+        </button>
+      </div>
+
+      {entries.length === 0 ? (
+        <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
+          <Weight size={28} className="mx-auto mb-2" />
+          <p className="text-sm">Nenhuma medição ainda. Registre peso, % de gordura, massa muscular etc. da última pesagem.</p>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+            {summaryKeys.map((key) => {
+              const meta = BODY_INDICATORS.find((i) => i.key === key);
+              const value = latest ? latest[key] : null;
+              const prevValue = prev ? prev[key] : null;
+              const diff = value !== null && value !== undefined && prevValue !== null && prevValue !== undefined
+                ? Math.round((value - prevValue) * 10) / 10
+                : null;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setSelectedIndicator(key)}
+                  className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === key ? "ring-2 ring-slate-300" : ""}`}
+                >
+                  <p className="text-xs text-slate-500 mb-1">{meta.label}</p>
+                  <div className="flex items-end gap-1.5">
+                    <span className="text-xl font-medium text-slate-900">{fmtNum(value, meta.decimals)}</span>
+                    <span className="text-xs text-slate-400 mb-0.5">{meta.unit}</span>
+                  </div>
+                  {diff !== null && diff !== 0 && (
+                    <span className={`flex items-center gap-0.5 text-xs mt-0.5 ${diff > 0 ? "text-amber-600" : "text-emerald-600"}`}>
+                      {diff > 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />} {fmtNum(Math.abs(diff), meta.decimals)}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="border border-slate-200 rounded-xl p-4 mb-6">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <p className="text-sm font-medium text-slate-700">Evolução</p>
+              <div className="flex flex-wrap gap-1.5">
+                {BODY_INDICATORS.map((ind) => (
+                  <button
+                    key={ind.key}
+                    onClick={() => setSelectedIndicator(ind.key)}
+                    className={`text-xs px-2 py-1 rounded-full border ${selectedIndicator === ind.key ? "border-slate-400 bg-white" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+                  >
+                    {ind.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <BodyIndicatorChart indicator={BODY_INDICATORS.find((i) => i.key === selectedIndicator)} entries={withImcEntries} />
+          </div>
+
+          <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
+            {withImcEntries.slice().reverse().map((e) => (
+              <div key={e.id} className="flex items-center justify-between px-4 py-2.5 flex-wrap gap-2">
+                <div className="flex items-center gap-3 flex-wrap min-w-0">
+                  <span className="text-sm text-slate-800 shrink-0">{fmtDate(e.date)}</span>
+                  <span className="text-xs text-slate-500">{fmtNum(e.weightKg, 1)} kg</span>
+                  {e.imc !== null && <span className="text-xs text-slate-400">IMC {fmtNum(e.imc, 1)}</span>}
+                  {e.bodyFatPct !== null && <span className="text-xs text-slate-400">{fmtNum(e.bodyFatPct, 1)}% gordura</span>}
+                  {e.muscleMassKg !== null && <span className="text-xs text-slate-400">{fmtNum(e.muscleMassKg, 1)} kg músculo</span>}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => setFormEntry(e)} className="text-slate-300 hover:text-slate-700 p-1.5" aria-label="Editar medição">
+                    <Pencil size={14} />
+                  </button>
+                  <button onClick={() => setConfirmDelete(e)} className="text-slate-300 hover:text-red-500 p-1.5" aria-label="Excluir medição">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
-      {hasBatches && !data && !analyzing && (
-        <div className="text-center py-6">
-          <p className="text-sm text-slate-500 mb-4">
-            A IA pode olhar todo o histórico dessa pessoa e dizer se algum exame novo faz sentido pedir — só sugere
-            quando há um motivo real nos dados, não fica pedindo exame à toa.
-          </p>
-          <button
-            onClick={onAnalyze}
-            className="text-sm px-4 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800"
-          >
-            Analisar histórico agora
-          </button>
-        </div>
+      {formEntry && (
+        <BodyEntryModal entry={formEntry} onCancel={() => setFormEntry(null)} onSave={saveEntry} />
       )}
 
-      {analyzing && (
-        <div className="flex items-center gap-2 text-slate-400 text-sm py-8 justify-center">
-          <Loader2 size={16} className="animate-spin" /> Analisando o histórico de exames...
-        </div>
+      {confirmDelete && (
+        <ConfirmModal
+          title="Excluir esta medição?"
+          message={`A medição de ${fmtDate(confirmDelete.date)} será removida do histórico de composição corporal.`}
+          confirmLabel="Excluir"
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => removeEntry(confirmDelete.id)}
+        />
       )}
+    </div>
+  );
+}
+
+function BodyIndicatorChart({ indicator, entries }) {
+  const points = entries
+    .map((e) => ({ date: e.date, value: e[indicator.key] }))
+    .filter((p) => p.value !== null && p.value !== undefined)
+    .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+
+  if (points.length < 2) {
+    return <p className="text-sm text-slate-400 py-6 text-center">Ainda não há histórico suficiente de "{indicator.label}" para um gráfico (precisa de pelo menos 2 medições com esse dado).</p>;
+  }
+
+  return (
+    <ResponsiveContainer width="100%" height={200}>
+      <LineChart data={points} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+        <XAxis dataKey="date" tickFormatter={fmtDate} tick={{ fontSize: 11, fill: "#94a3b8" }} />
+        <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} domain={["auto", "auto"]} />
+        <Tooltip labelFormatter={fmtDate} formatter={(v) => [`${fmtNum(v, indicator.decimals)} ${indicator.unit || ""}`, indicator.label]} />
+        <Line type="monotone" dataKey="value" stroke="#0f766e" strokeWidth={2} dot={{ r: 3 }} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+const BODY_FORM_FIELDS = [
+  { key: "weightKg", label: "Peso (kg)", step: "0.1" },
+  { key: "heightCm", label: "Altura (cm)", step: "0.1" },
+  { key: "bodyFatPct", label: "Gordura corporal (%)", step: "0.1" },
+  { key: "muscleMassKg", label: "Massa muscular (kg)", step: "0.1" },
+  { key: "visceralFat", label: "Gordura visceral", step: "1" },
+  { key: "boneMassKg", label: "Massa óssea (kg)", step: "0.01" },
+  { key: "bodyWaterPct", label: "Água corporal (%)", step: "0.1" },
+  { key: "bmrKcal", label: "Taxa metabólica basal (kcal)", step: "1" },
+];
+
+function BodyEntryModal({ entry, onCancel, onSave }) {
+  const [form, setForm] = useState({
+    date: entry.date || new Date().toISOString().slice(0, 10),
+    weightKg: entry.weightKg ?? "",
+    heightCm: entry.heightCm ?? "",
+    bodyFatPct: entry.bodyFatPct ?? "",
+    muscleMassKg: entry.muscleMassKg ?? "",
+    visceralFat: entry.visceralFat ?? "",
+    boneMassKg: entry.boneMassKg ?? "",
+    bodyWaterPct: entry.bodyWaterPct ?? "",
+    bmrKcal: entry.bmrKcal ?? "",
+    notes: entry.notes || "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const setField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+
+  const handleSave = async () => {
+    if (!form.date) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave({ ...form, id: entry.id });
+    } catch (e) {
+      setError(e.message || "Erro ao salvar medição.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell onClose={onCancel} title={entry.id ? "Editar medição" : "Nova medição"} wide>
+      <div className="mb-4">
+        <label className="text-xs text-slate-500 mb-1 block">Data da medição</label>
+        <input
+          type="date"
+          value={form.date}
+          onChange={(e) => setField("date", e.target.value)}
+          className="w-full sm:w-52 border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
+        />
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        {BODY_FORM_FIELDS.map((f) => (
+          <div key={f.key}>
+            <label className="text-xs text-slate-500 mb-1 block">{f.label}</label>
+            <input
+              type="number"
+              step={f.step}
+              value={form[f.key]}
+              onChange={(e) => setField(f.key, e.target.value)}
+              placeholder="Opcional"
+              className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="mb-4">
+        <label className="text-xs text-slate-500 mb-1 block">Notas (opcional)</label>
+        <textarea
+          value={form.notes}
+          onChange={(e) => setField("notes", e.target.value)}
+          rows={2}
+          className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm resize-none"
+        />
+      </div>
 
       {error && (
         <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
@@ -893,49 +1240,213 @@ function AlertsModal({ info, analyzing, onAnalyze, onClose }) {
         </div>
       )}
 
-      {data && !analyzing && (
-        <div>
-          {stale && (
-            <div className="mb-4 flex items-center justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-              <span className="flex items-center gap-1.5"><Info size={13} /> Há laudos novos desde a última análise.</span>
-              <button onClick={onAnalyze} className="underline whitespace-nowrap shrink-0">Atualizar análise</button>
-            </div>
-          )}
+      <div className="flex justify-end gap-2">
+        <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
+        <button
+          disabled={!form.date || saving}
+          onClick={handleSave}
+          className="flex items-center gap-1.5 text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
+        >
+          {saving && <Loader2 size={14} className="animate-spin" />}
+          {saving ? "Salvando..." : "Salvar medição"}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
 
-          <p className="text-sm text-slate-700 mb-4">{data.resumo}</p>
+const SEVERITY_META = {
+  leve: { label: "Leve", chip: "bg-slate-100 text-slate-600" },
+  moderado: { label: "Moderado", chip: "bg-amber-100 text-amber-700" },
+  intenso: { label: "Intenso", chip: "bg-red-100 text-red-700" },
+};
 
-          {data.temSugestoes && (data.sugestoes || []).length > 0 ? (
-            <ul className="space-y-3 mb-4">
-              {data.sugestoes.map((s, i) => {
-                const meta = URGENCY_META[s.urgencia] || URGENCY_META.baixa;
-                return (
-                  <li key={i} className="border border-slate-200 rounded-lg p-3">
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <p className="text-sm font-medium text-slate-900">{s.exame}</p>
-                      <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${meta.chip}`}>{meta.label}</span>
-                    </div>
-                    <p className="text-xs text-slate-500">{s.motivo}</p>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5 mb-4 text-sm">
-              <CheckCircle2 size={16} className="shrink-0" />
-              Nada no histórico justifica pedir exames novos agora.
-            </div>
-          )}
+function SymptomsScreen({ profileId }) {
+  const [symptoms, setSymptoms] = useState(null);
+  const [formEntry, setFormEntry] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
 
-          {!stale && (
-            <button onClick={onAnalyze} className="text-xs text-slate-500 hover:text-slate-800 underline mb-2">
-              Analisar de novo
-            </button>
-          )}
+  const load = useCallback(async () => {
+    setSymptoms(await api.getSymptoms(profileId));
+  }, [profileId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const saveSymptom = async (payload) => {
+    if (payload.id) {
+      await api.updateSymptom(profileId, payload.id, payload);
+    } else {
+      await api.createSymptom(profileId, payload);
+    }
+    setFormEntry(null);
+    await load();
+  };
+
+  const toggleStatus = async (s) => {
+    await api.updateSymptom(profileId, s.id, { ...s, status: s.status === "resolvido" ? "ativo" : "resolvido" });
+    await load();
+  };
+
+  const removeSymptom = async (id) => {
+    await api.deleteSymptom(profileId, id);
+    setConfirmDelete(null);
+    await load();
+  };
+
+  if (symptoms === null) {
+    return <div className="flex justify-center py-16 text-slate-400"><Loader2 className="animate-spin" size={22} /></div>;
+  }
+
+  const ordered = symptoms.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-slate-500">
+          {symptoms.length} sintoma{symptoms.length !== 1 ? "s" : ""} registrado{symptoms.length !== 1 ? "s" : ""}
+        </p>
+        <button
+          onClick={() => setFormEntry({ date: new Date().toISOString().slice(0, 10), description: "", severity: "", status: "ativo" })}
+          className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800"
+        >
+          <Plus size={15} /> Novo sintoma
+        </button>
+      </div>
+
+      <div className="mb-4 flex items-start gap-2 text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2">
+        <Info size={13} className="mt-0.5 shrink-0" />
+        Sintomas relatados aqui entram na análise de sugestão de exames (dentro de "Dicas de saúde"), junto com os exames e a composição corporal, para deixar as sugestões mais direcionadas.
+      </div>
+
+      {symptoms.length === 0 ? (
+        <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
+          <Stethoscope size={28} className="mx-auto mb-2" />
+          <p className="text-sm">Nenhum sintoma registrado ainda.</p>
+        </div>
+      ) : (
+        <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
+          {ordered.map((s) => {
+            const sevMeta = s.severity ? SEVERITY_META[s.severity] : null;
+            const resolved = s.status === "resolvido";
+            return (
+              <div key={s.id} className="flex items-start justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                    <span className="text-sm text-slate-800 font-medium">{fmtDate(s.date)}</span>
+                    {sevMeta && <span className={`text-xs px-2 py-0.5 rounded-full ${sevMeta.chip}`}>{sevMeta.label}</span>}
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${resolved ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-blue-700"}`}>
+                      {resolved ? "Resolvido" : "Ativo"}
+                    </span>
+                  </div>
+                  <p className={`text-sm ${resolved ? "text-slate-400 line-through" : "text-slate-700"}`}>{s.description}</p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => toggleStatus(s)} className="text-xs text-slate-400 hover:text-slate-700 underline whitespace-nowrap px-1">
+                    {resolved ? "Reativar" : "Marcar resolvido"}
+                  </button>
+                  <button onClick={() => setFormEntry(s)} className="text-slate-300 hover:text-slate-700 p-1.5" aria-label="Editar sintoma">
+                    <Pencil size={14} />
+                  </button>
+                  <button onClick={() => setConfirmDelete(s)} className="text-slate-300 hover:text-red-500 p-1.5" aria-label="Excluir sintoma">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
-      <div className="flex items-start gap-2 text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 mt-2">
-        <Info size={13} className="mt-0.5 shrink-0" /> {ALERTS_DISCLAIMER}
+      {formEntry && <SymptomModal entry={formEntry} onCancel={() => setFormEntry(null)} onSave={saveSymptom} />}
+
+      {confirmDelete && (
+        <ConfirmModal
+          title="Excluir este sintoma?"
+          message="O registro desse sintoma será removido do histórico."
+          confirmLabel="Excluir"
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => removeSymptom(confirmDelete.id)}
+        />
+      )}
+    </div>
+  );
+}
+
+function SymptomModal({ entry, onCancel, onSave }) {
+  const [date, setDate] = useState(entry.date || new Date().toISOString().slice(0, 10));
+  const [description, setDescription] = useState(entry.description || "");
+  const [severity, setSeverity] = useState(entry.severity || "");
+  const [status, setStatus] = useState(entry.status || "ativo");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleSave = async () => {
+    if (!date || !description.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave({ id: entry.id, date, description: description.trim(), severity, status });
+    } catch (e) {
+      setError(e.message || "Erro ao salvar sintoma.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell onClose={onCancel} title={entry.id ? "Editar sintoma" : "Novo sintoma"}>
+      <div className="mb-3">
+        <label className="text-xs text-slate-500 mb-1 block">Data</label>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+      </div>
+
+      <div className="mb-3">
+        <label className="text-xs text-slate-500 mb-1 block">Descrição do sintoma</label>
+        <textarea
+          autoFocus
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={3}
+          placeholder="Ex: cansaço frequente à tarde, dor de cabeça, palpitação..."
+          className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm resize-none"
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Intensidade</label>
+          <select value={severity} onChange={(e) => setSeverity(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+            <option value="">Não informar</option>
+            <option value="leve">Leve</option>
+            <option value="moderado">Moderado</option>
+            <option value="intenso">Intenso</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Status</label>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+            <option value="ativo">Ativo</option>
+            <option value="resolvido">Resolvido</option>
+          </select>
+        </div>
+      </div>
+
+      {error && (
+        <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2">
+        <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
+        <button
+          disabled={!date || !description.trim() || saving}
+          onClick={handleSave}
+          className="flex items-center gap-1.5 text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
+        >
+          {saving && <Loader2 size={14} className="animate-spin" />}
+          {saving ? "Salvando..." : "Salvar sintoma"}
+        </button>
       </div>
     </ModalShell>
   );

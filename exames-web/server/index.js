@@ -6,7 +6,7 @@ import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import db, { pdfDir } from "./db.js";
-import { callClaude, parseExamJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt } from "./anthropic.js";
+import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt } from "./anthropic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -48,6 +48,8 @@ app.delete("/api/profiles/:id", (req, res) => {
   }
   db.prepare("DELETE FROM batches WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM alerts WHERE profile_id = ?").run(id);
+  db.prepare("DELETE FROM body_entries WHERE profile_id = ?").run(id);
+  db.prepare("DELETE FROM symptoms WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM profiles WHERE id = ?").run(id);
   res.json({ ok: true });
 });
@@ -87,6 +89,88 @@ app.delete("/api/profiles/:profileId/batches/:batchId", (req, res) => {
   if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
   db.prepare("DELETE FROM results WHERE batch_id = ?").run(batchId);
   db.prepare("DELETE FROM batches WHERE id = ?").run(batchId);
+  res.json({ ok: true });
+});
+
+// ---------- Body composition (composição corporal) ----------
+function rowToBodyEntry(r) {
+  return {
+    id: r.id,
+    date: r.date,
+    weightKg: r.weight_kg,
+    heightCm: r.height_cm,
+    bodyFatPct: r.body_fat_pct,
+    muscleMassKg: r.muscle_mass_kg,
+    visceralFat: r.visceral_fat,
+    boneMassKg: r.bone_mass_kg,
+    bodyWaterPct: r.body_water_pct,
+    bmrKcal: r.bmr_kcal,
+    notes: r.notes,
+    savedAt: r.saved_at,
+  };
+}
+
+function numOrNull(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+app.get("/api/profiles/:profileId/body-entries", (req, res) => {
+  const { profileId } = req.params;
+  const rows = db
+    .prepare("SELECT * FROM body_entries WHERE profile_id = ? ORDER BY date ASC, saved_at ASC")
+    .all(profileId);
+  res.json(rows.map(rowToBodyEntry));
+});
+
+app.post("/api/profiles/:profileId/body-entries", (req, res) => {
+  try {
+    const { profileId } = req.params;
+    const b = req.body || {};
+    if (!b.date) return res.status(400).json({ error: "Data da medição é obrigatória" });
+    const id = uid();
+    db.prepare(
+      `INSERT INTO body_entries
+        (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, notes, saved_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).run(
+      id, profileId, b.date,
+      numOrNull(b.weightKg), numOrNull(b.heightCm), numOrNull(b.bodyFatPct), numOrNull(b.muscleMassKg),
+      numOrNull(b.visceralFat), numOrNull(b.boneMassKg), numOrNull(b.bodyWaterPct), numOrNull(b.bmrKcal),
+      b.notes || "", Date.now()
+    );
+    const row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(id);
+    res.json(rowToBodyEntry(row));
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao salvar medição" });
+  }
+});
+
+app.put("/api/profiles/:profileId/body-entries/:entryId", (req, res) => {
+  try {
+    const { entryId } = req.params;
+    const b = req.body || {};
+    const existing = db.prepare("SELECT id FROM body_entries WHERE id = ?").get(entryId);
+    if (!existing) return res.status(404).json({ error: "Medição não encontrada" });
+    if (!b.date) return res.status(400).json({ error: "Data da medição é obrigatória" });
+    db.prepare(
+      `UPDATE body_entries SET date=?, weight_kg=?, height_cm=?, body_fat_pct=?, muscle_mass_kg=?, visceral_fat=?, bone_mass_kg=?, body_water_pct=?, bmr_kcal=?, notes=? WHERE id=?`
+    ).run(
+      b.date,
+      numOrNull(b.weightKg), numOrNull(b.heightCm), numOrNull(b.bodyFatPct), numOrNull(b.muscleMassKg),
+      numOrNull(b.visceralFat), numOrNull(b.boneMassKg), numOrNull(b.bodyWaterPct), numOrNull(b.bmrKcal),
+      b.notes || "", entryId
+    );
+    const row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(entryId);
+    res.json(rowToBodyEntry(row));
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao atualizar medição" });
+  }
+});
+
+app.delete("/api/profiles/:profileId/body-entries/:entryId", (req, res) => {
+  db.prepare("DELETE FROM body_entries WHERE id = ?").run(req.params.entryId);
   res.json({ ok: true });
 });
 
@@ -174,7 +258,7 @@ app.post("/api/tips", async (req, res) => {
   }
 });
 
-// ---------- Alerts (sugestões de novos exames via IA) ----------
+// ---------- Alerts (sugestões de novos exames via IA, combinando exames + composição corporal + sintomas) ----------
 function latestBatchId(profileId) {
   const row = db
     .prepare("SELECT id FROM batches WHERE profile_id = ? ORDER BY date DESC, saved_at DESC LIMIT 1")
@@ -182,7 +266,23 @@ function latestBatchId(profileId) {
   return row ? row.id : null;
 }
 
-function buildHistoryText(profileId, maxBatches = 10) {
+function computeSignature(profileId) {
+  const batch = latestBatchId(profileId);
+  const body = db.prepare("SELECT COUNT(*) c, MAX(saved_at) t FROM body_entries WHERE profile_id = ?").get(profileId);
+  const sym = db.prepare("SELECT COUNT(*) c, MAX(created_at) t FROM symptoms WHERE profile_id = ?").get(profileId);
+  return `b:${batch || "-"}|body:${body.c}:${body.t || "-"}|sym:${sym.c}:${sym.t || "-"}`;
+}
+
+function hasAnyData(profileId) {
+  const batch = db.prepare("SELECT 1 FROM batches WHERE profile_id = ? LIMIT 1").get(profileId);
+  if (batch) return true;
+  const body = db.prepare("SELECT 1 FROM body_entries WHERE profile_id = ? LIMIT 1").get(profileId);
+  if (body) return true;
+  const sym = db.prepare("SELECT 1 FROM symptoms WHERE profile_id = ? LIMIT 1").get(profileId);
+  return !!sym;
+}
+
+function buildExamHistoryText(profileId, maxBatches = 10) {
   const batchRows = db
     .prepare("SELECT id, date, lab FROM batches WHERE profile_id = ? ORDER BY date ASC, saved_at ASC")
     .all(profileId);
@@ -201,48 +301,143 @@ function buildHistoryText(profileId, maxBatches = 10) {
     .join("\n\n");
 }
 
-// Leitura rápida (sem custo de IA) — usada para mostrar o sino e decidir se precisa reanalisar
+function buildBodyHistoryText(profileId, maxEntries = 10) {
+  const rows = db
+    .prepare("SELECT * FROM body_entries WHERE profile_id = ? ORDER BY date ASC, saved_at ASC")
+    .all(profileId);
+  const recent = rows.slice(-maxEntries);
+  const fieldLabels = [
+    ["weight_kg", "peso", "kg"], ["height_cm", "altura", "cm"], ["body_fat_pct", "gordura corporal", "%"],
+    ["muscle_mass_kg", "massa muscular", "kg"], ["visceral_fat", "gordura visceral", ""],
+    ["bone_mass_kg", "massa óssea", "kg"], ["body_water_pct", "água corporal", "%"], ["bmr_kcal", "TMB", "kcal"],
+  ];
+  return recent
+    .map((e) => {
+      const parts = fieldLabels
+        .filter(([col]) => e[col] !== null && e[col] !== undefined)
+        .map(([col, label, unit]) => `${label}: ${e[col]}${unit}`);
+      return `Medição de ${e.date || "data não informada"}: ${parts.join(", ") || "sem dados"}`;
+    })
+    .join("\n");
+}
+
+function buildSymptomsText(profileId, maxSymptoms = 20) {
+  const rows = db
+    .prepare("SELECT date, description, severity, status FROM symptoms WHERE profile_id = ? ORDER BY date ASC, created_at ASC")
+    .all(profileId);
+  const recent = rows.slice(-maxSymptoms);
+  return recent
+    .map((s) => {
+      const sev = s.severity ? ` (intensidade: ${s.severity})` : "";
+      return `- ${s.date || "data não informada"}: ${s.description}${sev} [${s.status === "resolvido" ? "resolvido" : "ativo"}]`;
+    })
+    .join("\n");
+}
+
+// Leitura rápida (sem custo de IA) — usada para mostrar o aviso e decidir se precisa reanalisar
 app.get("/api/profiles/:profileId/alerts", (req, res) => {
   const { profileId } = req.params;
-  const latest = latestBatchId(profileId);
-  if (!latest) return res.json({ data: null, stale: false, hasBatches: false });
+  if (!hasAnyData(profileId)) return res.json({ data: null, stale: false, hasData: false });
   const stored = db.prepare("SELECT * FROM alerts WHERE profile_id = ?").get(profileId);
-  if (!stored) return res.json({ data: null, stale: true, hasBatches: true });
-  const stale = stored.based_on_batch_id !== latest;
-  res.json({ data: JSON.parse(stored.data), stale, hasBatches: true, createdAt: stored.created_at });
+  if (!stored) return res.json({ data: null, stale: true, hasData: true });
+  const stale = stored.based_on_signature !== computeSignature(profileId);
+  res.json({ data: JSON.parse(stored.data), stale, hasData: true, createdAt: stored.created_at });
 });
 
 // Roda a análise de IA de fato (chamada explícita, não automática, pra não gastar API à toa)
 app.post("/api/profiles/:profileId/alerts/analyze", async (req, res) => {
   try {
     const { profileId } = req.params;
-    const latest = latestBatchId(profileId);
-    if (!latest) return res.status(400).json({ error: "Ainda não há exames suficientes para analisar." });
+    if (!hasAnyData(profileId)) {
+      return res.status(400).json({ error: "Adicione ao menos um exame, uma medição de composição corporal ou um sintoma antes de analisar." });
+    }
 
-    const historyText = buildHistoryText(profileId);
-    const prompt = buildAlertsPrompt(historyText);
-    const text = await callClaude([{ role: "user", content: prompt }], 1000);
-    const parsed = JSON.parse(extractJsonBlock(text));
+    const examHistoryText = buildExamHistoryText(profileId);
+    const bodyHistoryText = buildBodyHistoryText(profileId);
+    const symptomsText = buildSymptomsText(profileId);
+    const signature = computeSignature(profileId);
+
+    const prompt = buildAlertsPrompt(examHistoryText, bodyHistoryText, symptomsText);
+    const text = await callClaude([{ role: "user", content: prompt }], 2000);
+    const parsed = repairJson(text);
 
     const dataStr = JSON.stringify(parsed);
     db.prepare(
-      `INSERT INTO alerts (profile_id, based_on_batch_id, has_suggestions, data, created_at)
+      `INSERT INTO alerts (profile_id, based_on_signature, has_suggestions, data, created_at)
        VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(profile_id) DO UPDATE SET based_on_batch_id = excluded.based_on_batch_id, has_suggestions = excluded.has_suggestions, data = excluded.data, created_at = excluded.created_at`
-    ).run(profileId, latest, parsed.temSugestoes ? 1 : 0, dataStr, Date.now());
+       ON CONFLICT(profile_id) DO UPDATE SET based_on_signature = excluded.based_on_signature, has_suggestions = excluded.has_suggestions, data = excluded.data, created_at = excluded.created_at`
+    ).run(profileId, signature, parsed.temSugestoes ? 1 : 0, dataStr, Date.now());
 
-    res.json({ data: parsed, stale: false, hasBatches: true, createdAt: Date.now() });
+    res.json({ data: parsed, stale: false, hasData: true, createdAt: Date.now() });
   } catch (e) {
-    res.status(500).json({ error: e.message || "Erro ao analisar histórico de exames" });
+    res.status(500).json({ error: e.message || "Erro ao analisar histórico" });
   }
+});
+
+// ---------- Symptoms (sintomas relatados pela pessoa) ----------
+function rowToSymptom(r) {
+  return { id: r.id, date: r.date, description: r.description, severity: r.severity, status: r.status, createdAt: r.created_at };
+}
+
+app.get("/api/profiles/:profileId/symptoms", (req, res) => {
+  const rows = db
+    .prepare("SELECT * FROM symptoms WHERE profile_id = ? ORDER BY date ASC, created_at ASC")
+    .all(req.params.profileId);
+  res.json(rows.map(rowToSymptom));
+});
+
+app.post("/api/profiles/:profileId/symptoms", (req, res) => {
+  try {
+    const { profileId } = req.params;
+    const b = req.body || {};
+    if (!b.description || !b.description.trim()) return res.status(400).json({ error: "Descreva o sintoma" });
+    if (!b.date) return res.status(400).json({ error: "Data é obrigatória" });
+    const id = uid();
+    db.prepare(
+      "INSERT INTO symptoms (id, profile_id, date, description, severity, status, created_at) VALUES (?,?,?,?,?,?,?)"
+    ).run(id, profileId, b.date, b.description.trim(), b.severity || null, b.status === "resolvido" ? "resolvido" : "ativo", Date.now());
+    res.json(rowToSymptom(db.prepare("SELECT * FROM symptoms WHERE id = ?").get(id)));
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao salvar sintoma" });
+  }
+});
+
+app.put("/api/profiles/:profileId/symptoms/:symptomId", (req, res) => {
+  try {
+    const { symptomId } = req.params;
+    const b = req.body || {};
+    const existing = db.prepare("SELECT id FROM symptoms WHERE id = ?").get(symptomId);
+    if (!existing) return res.status(404).json({ error: "Sintoma não encontrado" });
+    if (!b.description || !b.description.trim()) return res.status(400).json({ error: "Descreva o sintoma" });
+    if (!b.date) return res.status(400).json({ error: "Data é obrigatória" });
+    db.prepare(
+      "UPDATE symptoms SET date=?, description=?, severity=?, status=? WHERE id=?"
+    ).run(b.date, b.description.trim(), b.severity || null, b.status === "resolvido" ? "resolvido" : "ativo", symptomId);
+    res.json(rowToSymptom(db.prepare("SELECT * FROM symptoms WHERE id = ?").get(symptomId)));
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao atualizar sintoma" });
+  }
+});
+
+app.delete("/api/profiles/:profileId/symptoms/:symptomId", (req, res) => {
+  db.prepare("DELETE FROM symptoms WHERE id = ?").run(req.params.symptomId);
+  res.json({ ok: true });
 });
 
 // ---------- Export backup ----------
 app.get("/api/export", (req, res) => {
   try {
     const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, created_at as createdAt FROM profiles").all();
-    const backup = { version: 1, exportedAt: new Date().toISOString(), profiles, batches: {} };
+    const backup = { version: 3, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {} };
     for (const p of profiles) {
+      const symptomRows = db
+        .prepare("SELECT * FROM symptoms WHERE profile_id = ? ORDER BY date ASC, created_at ASC")
+        .all(p.id);
+      backup.symptoms[p.id] = symptomRows.map(rowToSymptom);
+      const bodyRows = db
+        .prepare("SELECT * FROM body_entries WHERE profile_id = ? ORDER BY date ASC, saved_at ASC")
+        .all(p.id);
+      backup.bodyEntries[p.id] = bodyRows.map(rowToBodyEntry);
       const batchRows = db
         .prepare("SELECT id as batchId, date, lab, file_hash as hash, pdf_filename as fileName FROM batches WHERE profile_id = ?")
         .all(p.id);
@@ -269,12 +464,14 @@ app.get("/api/export", (req, res) => {
 // ---------- Import backup ----------
 app.post("/api/import", (req, res) => {
   try {
-    const { profiles, batches } = req.body || {};
+    const { profiles, batches, bodyEntries, symptoms } = req.body || {};
     if (!Array.isArray(profiles)) return res.status(400).json({ error: "Formato de backup inválido." });
 
     let importedProfiles = 0;
     let importedBatches = 0;
     let importedResults = 0;
+    let importedBodyEntries = 0;
+    let importedSymptoms = 0;
 
     const existingNames = new Set(db.prepare("SELECT name FROM profiles").all().map((r) => r.name));
 
@@ -316,9 +513,30 @@ app.post("/api/import", (req, res) => {
           importedResults++;
         }
       }
+      const bodyList = (bodyEntries && bodyEntries[p.id]) || [];
+      for (const e of bodyList) {
+        db.prepare(
+          `INSERT INTO body_entries
+            (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, notes, saved_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).run(
+          uid(), profileId, e.date || null,
+          numOrNull(e.weightKg), numOrNull(e.heightCm), numOrNull(e.bodyFatPct), numOrNull(e.muscleMassKg),
+          numOrNull(e.visceralFat), numOrNull(e.boneMassKg), numOrNull(e.bodyWaterPct), numOrNull(e.bmrKcal),
+          e.notes || "", Date.now()
+        );
+        importedBodyEntries++;
+      }
+      const symptomList = (symptoms && symptoms[p.id]) || [];
+      for (const s of symptomList) {
+        db.prepare(
+          "INSERT INTO symptoms (id, profile_id, date, description, severity, status, created_at) VALUES (?,?,?,?,?,?,?)"
+        ).run(uid(), profileId, s.date || null, s.description || "", s.severity || null, s.status === "resolvido" ? "resolvido" : "ativo", Date.now());
+        importedSymptoms++;
+      }
     }
 
-    res.json({ ok: true, importedProfiles, importedBatches, importedResults });
+    res.json({ ok: true, importedProfiles, importedBatches, importedResults, importedBodyEntries, importedSymptoms });
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao importar backup" });
   }

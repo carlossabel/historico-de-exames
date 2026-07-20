@@ -37,6 +37,12 @@ export function extractJsonBlock(text) {
   return t;
 }
 
+// Repara JSON truncado por corte de max_tokens (bracket-balancing genérico).
+// Reaproveitado tanto na extração de exames quanto na análise de alertas.
+export function repairJson(text) {
+  return parseExamJson(text);
+}
+
 export function parseExamJson(text) {
   const t = extractJsonBlock(text);
   try {
@@ -68,22 +74,30 @@ Regras:
 - Nao invente valores. Se um campo nao existir, use string vazia.
 - Responda em portugues.`;
 
-export function buildAlertsPrompt(historyText) {
-  return `Você é um assistente clínico de apoio (não substitui um médico) analisando o HISTÓRICO COMPLETO de exames laboratoriais de uma pessoa, em ordem cronológica, para decidir se faz sentido sugerir a ela que peça exames complementares novos.
+export function buildAlertsPrompt(examHistoryText, bodyHistoryText, symptomsText) {
+  return `Você é um assistente clínico de apoio (não substitui um médico e NÃO faz diagnóstico) analisando três fontes de dados de uma pessoa, em conjunto, para decidir se faz sentido sugerir que ela peça exames complementares novos.
 
-Histórico (cada bloco é um laudo, do mais antigo para o mais recente):
-${historyText}
+1) Histórico de exames laboratoriais (cada bloco é um laudo, do mais antigo para o mais recente):
+${examHistoryText || "Nenhum exame laboratorial registrado ainda."}
+
+2) Histórico de composição corporal (peso, IMC, % de gordura, massa muscular etc., do mais antigo para o mais recente):
+${bodyHistoryText || "Nenhuma medição de composição corporal registrada ainda."}
+
+3) Sintomas relatados pela pessoa (podem estar ativos ou já resolvidos):
+${symptomsText || "Nenhum sintoma relatado."}
+
+Seu trabalho é CRUZAR essas três fontes — por exemplo: um sintoma relatado (ex.: cansaço, queda de cabelo, palpitação) combinado com um exame em atenção/fora do ideal ou uma tendência de piora na composição corporal é um motivo bem mais forte para sugerir um exame do que qualquer uma das três fontes isolada. Use essa combinação para tornar as sugestões mais direcionadas e precisas, mas o resultado continua sendo uma SUGESTÃO DE EXAME, nunca um diagnóstico de doença.
 
 Seu critério deve ser rigoroso e conservador:
-- SÓ sugira um exame novo/complementar se houver um motivo concreto nos dados: um resultado fora da faixa (F) que normalmente pede confirmação ou investigação complementar, uma tendência de piora ao longo do tempo (mesmo dentro da faixa), um valor em atenção (A) que persiste ou piora em mais de uma coleta, ou uma combinação de resultados que sugere investigar algo específico.
-- NÃO sugira exames "de rotina" genéricos, exames que já aparecem recentemente no histórico sem motivo de repetir, ou sugestões vagas tipo "faça check-up completo".
+- SÓ sugira um exame novo/complementar se houver um motivo concreto: um resultado fora da faixa (F) que pede confirmação, uma tendência de piora ao longo do tempo (exames ou composição corporal), um sintoma que persiste/agrava e que faz sentido investigar junto com os dados disponíveis, ou uma combinação relevante entre sintoma(s) e os dados numéricos.
+- NÃO sugira exames "de rotina" genéricos, exames já feitos recentemente sem motivo de repetir, nem sugestões vagas tipo "faça check-up completo". Sintomas isolados sem nenhum apoio nos dados numéricos e sem persistência também não bastam sozinhos, a menos que sejam claramente compatíveis com uma investigação específica.
 - Se os dados não justificarem nenhum exame novo agora, retorne temSugestoes:false — isso é o resultado esperado na maioria das vezes, não force sugestões para parecer útil.
-- Cada sugestão precisa citar o dado concreto do histórico que a motiva (nome do exame já feito, valores, datas).
-- Nunca diagnostique doenças nem cite nomes de medicamentos. Nunca use tom alarmista.
-- No máximo 5 sugestões.
+- Cada sugestão precisa citar o dado concreto que a motiva (exame, valor, data, medição corporal ou sintoma), mas em UMA frase curta (até ~25 palavras) — sem repetir o histórico inteiro.
+- Nunca diagnostique doenças, nunca nomeie uma condição médica como conclusão, nunca cite nomes de medicamentos. Nunca use tom alarmista.
+- No máximo 4 sugestões. Seja extremamente conciso: essa resposta tem um limite curto de tamanho.
 
-Responda APENAS com JSON válido, sem markdown, sem texto antes ou depois, no formato exato:
-{"temSugestoes": true|false, "resumo": "1-2 frases explicando a conclusão geral", "sugestoes": [{"exame": "nome do exame sugerido", "motivo": "explicação curta baseada nos dados concretos do histórico", "urgencia": "baixa|media|alta"}]}
+Responda APENAS com JSON válido, sem markdown, sem texto antes ou depois, no formato exato (resumo com no máximo 2 frases curtas, motivo com no máximo 1 frase curta):
+{"temSugestoes": true|false, "resumo": "1-2 frases curtas explicando a conclusão geral, mencionando se sintomas influenciaram", "sugestoes": [{"exame": "nome do exame sugerido", "motivo": "1 frase curta baseada em dado(s) concreto(s) — pode combinar exame/corpo/sintoma", "urgencia": "baixa|media|alta"}]}
 
 Responda em português.`;
 }

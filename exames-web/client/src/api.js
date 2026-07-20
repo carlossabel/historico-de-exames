@@ -100,3 +100,65 @@ export async function analyzeAlerts(profileId) {
   if (!r.ok) throw new Error(data.error || "Erro ao analisar histórico de exames");
   return data;
 }
+
+export async function getBodyEntries(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/body-entries`);
+  return r.json();
+}
+
+export async function createBodyEntry(profileId, payload) {
+  const r = await fetch(`/api/profiles/${profileId}/body-entries`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao salvar medição");
+  return data;
+}
+
+export async function updateBodyEntry(profileId, entryId, payload) {
+  const r = await fetch(`/api/profiles/${profileId}/body-entries/${entryId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao atualizar medição");
+  return data;
+}
+
+export async function deleteBodyEntry(profileId, entryId) {
+  await fetch(`/api/profiles/${profileId}/body-entries/${entryId}`, { method: "DELETE" });
+}
+
+export async function getSymptoms(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/symptoms`);
+  return r.json();
+}
+
+export async function createSymptom(profileId, payload) {
+  const r = await fetch(`/api/profiles/${profileId}/symptoms`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao salvar sintoma");
+  return data;
+}
+
+export async function updateSymptom(profileId, symptomId, payload) {
+  const r = await fetch(`/api/profiles/${profileId}/symptoms/${symptomId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao atualizar sintoma");
+  return data;
+}
+
+export async function deleteSymptom(profileId, symptomId) {
+  await fetch(`/api/profiles/${profileId}/symptoms/${symptomId}`, { method: "DELETE" });
+}
