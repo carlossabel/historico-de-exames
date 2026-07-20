@@ -57,6 +57,28 @@ funciona do mesmo jeito (Render, Fly.io, um VPS com Docker, etc.).
 Você já tem uma — só garanta que ela está no campo `ANTHROPIC_API_KEY` das
 variáveis de ambiente da hospedagem, nunca no código ou no frontend.
 
+## Importar um backup exportado do artefato do Claude
+
+Se você usou a versão do app dentro do Claude antes de migrar para este
+projeto, dá pra trazer aquele histórico pra cá:
+
+1. No artefato do Claude, clique em **Exportar backup** na tela inicial.
+   Isso baixa um arquivo `backup-exames-AAAA-MM-DD.json`.
+2. No Railway, defina a variável de ambiente `IMPORT_SECRET` com uma senha
+   forte (só você vai saber).
+3. No seu computador, com o arquivo baixado na pasta atual, rode:
+   ```bash
+   curl -X POST https://SEU-APP.up.railway.app/api/import \
+     -H "Content-Type: application/json" \
+     -H "x-import-secret: SUA_SENHA_DO_IMPORT_SECRET" \
+     --data @backup-exames-AAAA-MM-DD.json
+   ```
+4. A resposta mostra quantos perfis, laudos e resultados foram importados.
+5. **Depois de importar, remova a variável `IMPORT_SECRET`** (ou troque o
+   valor) — essa rota aceita qualquer JSON no formato certo e escreve
+   direto no banco, então não vale a pena deixá-la disponível
+   indefinidamente.
+
 ## Avisos importantes
 
 - **Sem login**: este projeto não tem autenticação. Qualquer pessoa com a

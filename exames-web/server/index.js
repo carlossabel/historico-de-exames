@@ -173,6 +173,71 @@ app.post("/api/tips", async (req, res) => {
   }
 });
 
+// ---------- Import backup ----------
+app.post("/api/import", (req, res) => {
+  try {
+    const secret = process.env.IMPORT_SECRET;
+    if (!secret) {
+      return res.status(403).json({ error: "Defina a variável de ambiente IMPORT_SECRET no servidor antes de usar essa rota." });
+    }
+    if (req.headers["x-import-secret"] !== secret) {
+      return res.status(401).json({ error: "Chave de importação inválida." });
+    }
+    const { profiles, batches } = req.body || {};
+    if (!Array.isArray(profiles)) return res.status(400).json({ error: "Formato de backup inválido." });
+
+    let importedProfiles = 0;
+    let importedBatches = 0;
+    let importedResults = 0;
+
+    const existingNames = new Set(db.prepare("SELECT name FROM profiles").all().map((r) => r.name));
+
+    for (const p of profiles) {
+      let profileId = p.id;
+      const already = db.prepare("SELECT id FROM profiles WHERE id = ?").get(profileId);
+      if (already) {
+        profileId = uid(); // avoid id collision with existing data
+      }
+      const count = db.prepare("SELECT COUNT(*) as c FROM profiles").get().c;
+      db.prepare("INSERT INTO profiles (id, name, color_idx, created_at) VALUES (?,?,?,?)").run(
+        profileId,
+        p.name || "Sem nome",
+        typeof p.colorIdx === "number" ? p.colorIdx : count % 8,
+        p.createdAt || Date.now()
+      );
+      importedProfiles++;
+
+      const batchList = (batches && batches[p.id]) || [];
+      for (const b of batchList) {
+        const batchId = uid();
+        let hasPdf = 0;
+        if (b.pdfBase64) {
+          try {
+            fs.writeFileSync(path.join(pdfDir, `${batchId}.pdf`), Buffer.from(b.pdfBase64, "base64"));
+            hasPdf = 1;
+          } catch (e) {}
+        }
+        db.prepare(
+          "INSERT INTO batches (id, profile_id, date, lab, file_hash, pdf_filename, has_pdf, saved_at) VALUES (?,?,?,?,?,?,?,?)"
+        ).run(batchId, profileId, b.date || null, b.lab || "", b.hash || null, b.fileName || "exame.pdf", hasPdf, Date.now());
+        importedBatches++;
+
+        const insertResult = db.prepare(
+          "INSERT INTO results (id, batch_id, name, value, unit, ref, status, category) VALUES (?,?,?,?,?,?,?,?)"
+        );
+        for (const r of b.results || []) {
+          insertResult.run(uid(), batchId, r.name || "", r.value ?? "", r.unit || "", r.ref || "", r.status || "N", r.category || "Outro");
+          importedResults++;
+        }
+      }
+    }
+
+    res.json({ ok: true, importedProfiles, importedBatches, importedResults });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao importar backup" });
+  }
+});
+
 // ---------- Serve frontend build ----------
 const clientDist = path.join(__dirname, "..", "client", "dist");
 if (fs.existsSync(clientDist)) {

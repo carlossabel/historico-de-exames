@@ -14,5 +14,6 @@ COPY --from=client-build /app/client/dist ./client/dist
 
 ENV PORT=3000
 EXPOSE 3000
+VOLUME ["/app/data"]
 
 CMD ["node", "server/index.js"]
