@@ -4,6 +4,7 @@ import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
   FileUp, Download, Bell, Weight, Pencil, Stethoscope, Dumbbell, Camera, Watch, Link, Copy, RefreshCw,
+  LayoutDashboard, Flame, Gauge,
 } from "lucide-react";
 import * as api from "./api.js";
 
@@ -394,7 +395,7 @@ function ProfileScreen({ profile, onBack, initialTab }) {
   const [tipsOpen, setTipsOpen] = useState(false);
   const [selectedExam, setSelectedExam] = useState(null);
   const [alertsInfo, setAlertsInfo] = useState(null);
-  const [tab, setTab] = useState(initialTab || "exames");
+  const [tab, setTab] = useState(initialTab || "painel");
   const fileInputRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -510,32 +511,47 @@ function ProfileScreen({ profile, onBack, initialTab }) {
         )}
       </div>
 
-      <div className="flex items-center gap-1 mb-6 border-b border-slate-200">
+      <div className="flex items-center gap-1 mb-6 border-b border-slate-200 overflow-x-auto">
+        <button
+          onClick={() => setTab("painel")}
+          className={`text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "painel" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+        >
+          Painel
+        </button>
         <button
           onClick={() => setTab("exames")}
-          className={`text-sm px-3 py-2 border-b-2 -mb-px ${tab === "exames" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+          className={`text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "exames" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
         >
           Exames
         </button>
         <button
           onClick={() => setTab("corpo")}
-          className={`text-sm px-3 py-2 border-b-2 -mb-px ${tab === "corpo" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+          className={`text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "corpo" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
         >
           Composição corporal
         </button>
         <button
           onClick={() => setTab("sintomas")}
-          className={`text-sm px-3 py-2 border-b-2 -mb-px ${tab === "sintomas" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+          className={`text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "sintomas" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
         >
           Sintomas
         </button>
         <button
           onClick={() => setTab("atividades")}
-          className={`text-sm px-3 py-2 border-b-2 -mb-px ${tab === "atividades" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+          className={`text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "atividades" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
         >
           Atividades
         </button>
       </div>
+
+      {tab === "painel" && (
+        <DashboardScreen
+          profileId={profile.id}
+          profileName={profile.name}
+          onOpenTips={() => setTipsOpen(true)}
+          onGoTo={(t) => setTab(t)}
+        />
+      )}
 
       {tab === "corpo" && <BodyCompositionScreen profileId={profile.id} />}
 
@@ -595,7 +611,7 @@ function ProfileScreen({ profile, onBack, initialTab }) {
 
       {reviewData && <ReviewModal data={reviewData} onCancel={() => setReviewData(null)} onConfirm={saveBatch} />}
 
-      {tipsOpen && latestBatch && (
+      {tipsOpen && (
         <TipsModal
           profileId={profile.id}
           alertsInfo={alertsInfo}
@@ -1998,6 +2014,244 @@ function ActivityIntegrations({ profileId, onSynced }) {
           onConfirm={resetWebhook}
         />
       )}
+    </div>
+  );
+}
+
+function VitalRings({ scorePct, activityPct, consistencyPct }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setMounted(true), 80);
+    return () => clearTimeout(t);
+  }, []);
+
+  const rings = [
+    { r: 86, pct: scorePct, color: "#2dd4bf" },   // teal-400 — score dos exames
+    { r: 68, pct: activityPct, color: "#fb7185" }, // rose-400 — atividade da semana
+    { r: 50, pct: consistencyPct, color: "#fbbf24" }, // amber-400 — consistência de registro
+  ];
+
+  return (
+    <svg viewBox="0 0 200 200" className="w-40 h-40 sm:w-48 sm:h-48 shrink-0">
+      {rings.map((ring, i) => {
+        const circumference = 2 * Math.PI * ring.r;
+        const target = Math.max(0, Math.min(100, ring.pct ?? 0));
+        const offset = circumference * (1 - (mounted ? target : 0) / 100);
+        return (
+          <g key={i}>
+            <circle cx="100" cy="100" r={ring.r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="11" />
+            <circle
+              cx="100" cy="100" r={ring.r} fill="none" stroke={ring.color} strokeWidth="11" strokeLinecap="round"
+              strokeDasharray={circumference} strokeDashoffset={offset}
+              transform="rotate(-90 100 100)"
+              style={{ transition: "stroke-dashoffset 1.1s cubic-bezier(0.16,1,0.3,1)" }}
+            />
+          </g>
+        );
+      })}
+      <text x="100" y="94" textAnchor="middle" fill="white" fontSize="40" fontFamily='"Fraunces", serif' fontStyle="italic" fontWeight="500">
+        {scorePct !== null ? scorePct : "—"}
+      </text>
+      <text x="100" y="118" textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize="10" letterSpacing="1.5" style={{ textTransform: "uppercase" }}>
+        score de exames
+      </text>
+    </svg>
+  );
+}
+
+function MiniSparkline({ points, color = "#0f766e" }) {
+  if (!points || points.length < 2) {
+    return <div className="h-10 flex items-center text-xs text-slate-300">sem histórico suficiente</div>;
+  }
+  return (
+    <ResponsiveContainer width="100%" height={40}>
+      <LineChart data={points}>
+        <Line type="monotone" dataKey="value" stroke={color} strokeWidth={2} dot={false} isAnimationActive={false} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+function WeeklyBars({ days }) {
+  const max = Math.max(1, ...days.map((d) => d.minutes));
+  return (
+    <div className="flex items-end gap-1.5 h-12">
+      {days.map((d, i) => (
+        <div key={i} className="flex-1 flex flex-col items-center gap-1">
+          <div className="w-full bg-slate-100 rounded-sm overflow-hidden flex items-end" style={{ height: "36px" }}>
+            <div
+              className="w-full bg-rose-400 rounded-sm"
+              style={{ height: `${Math.round((d.minutes / max) * 100)}%`, transition: "height 0.6s ease-out" }}
+            />
+          </div>
+          <span className="text-[9px] text-slate-400">{d.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DashboardCard({ title, onClick, children }) {
+  return (
+    <button onClick={onClick} className="text-left bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-300 hover:shadow-sm transition">
+      <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2">{title}</p>
+      {children}
+    </button>
+  );
+}
+
+function DashboardScreen({ profileId, profileName, onOpenTips, onGoTo }) {
+  const [loading, setLoading] = useState(true);
+  const [index, setIndex] = useState([]);
+  const [batches, setBatches] = useState({});
+  const [bodyEntries, setBodyEntries] = useState([]);
+  const [symptoms, setSymptoms] = useState([]);
+  const [activities, setActivities] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const idx = await api.getBatchIndex(profileId);
+      const loadedBatches = {};
+      await Promise.all(idx.map(async (b) => { loadedBatches[b.batchId] = await api.getBatch(profileId, b.batchId); }));
+      const [body, syms, acts] = await Promise.all([
+        api.getBodyEntries(profileId),
+        api.getSymptoms(profileId),
+        api.getActivities(profileId),
+      ]);
+      setIndex(idx);
+      setBatches(loadedBatches);
+      setBodyEntries(body);
+      setSymptoms(syms);
+      setActivities(acts);
+      setLoading(false);
+    })();
+  }, [profileId]);
+
+  if (loading) {
+    return <div className="flex justify-center py-16 text-slate-400"><Loader2 className="animate-spin" size={22} /></div>;
+  }
+
+  const orderedBatchIds = index.map((b) => b.batchId);
+  const scoreHistory = orderedBatchIds
+    .map((id) => batches[id])
+    .filter(Boolean)
+    .map((b) => ({ date: b.date, value: computeScore(b.results) }))
+    .filter((x) => x.value !== null)
+    .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const latestScore = scoreHistory.length ? scoreHistory[scoreHistory.length - 1].value : null;
+  const scoreTrend = scoreHistory.length >= 2 ? scoreHistory[scoreHistory.length - 1].value - scoreHistory[scoreHistory.length - 2].value : null;
+
+  const withImcEntries = withImc(bodyEntries);
+  const latestBody = withImcEntries.length ? withImcEntries[withImcEntries.length - 1] : null;
+  const prevBody = withImcEntries.length > 1 ? withImcEntries[withImcEntries.length - 2] : null;
+  const weightHistory = withImcEntries
+    .filter((e) => e.weightKg !== null && e.weightKg !== undefined)
+    .map((e) => ({ date: e.date, value: e.weightKg }));
+  const weightTrend = latestBody && prevBody && latestBody.weightKg != null && prevBody.weightKg != null
+    ? Math.round((latestBody.weightKg - prevBody.weightKg) * 10) / 10 : null;
+
+  const last7Days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    const iso = d.toISOString().slice(0, 10);
+    const minutes = activities.filter((a) => a.date === iso).reduce((s, a) => s + (a.durationMin || 0), 0);
+    return { label: "DSTQQSS"[d.getDay()], minutes, iso };
+  });
+  const weeklyMinutes = last7Days.reduce((s, d) => s + d.minutes, 0);
+  const activityPct = Math.round(Math.min(100, (weeklyMinutes / 150) * 100));
+
+  const windowStart = daysAgo(29);
+  const activeDates = new Set();
+  index.forEach((b) => { if (b.date >= windowStart) activeDates.add(b.date); });
+  bodyEntries.forEach((e) => { if (e.date >= windowStart) activeDates.add(e.date); });
+  symptoms.forEach((s) => { if (s.date >= windowStart) activeDates.add(s.date); });
+  activities.forEach((a) => { if (a.date >= windowStart) activeDates.add(a.date); });
+  const consistencyPct = Math.round((activeDates.size / 30) * 100);
+
+  const activeSymptoms = symptoms.filter((s) => s.status !== "resolvido").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  const hasAnyData = index.length > 0 || bodyEntries.length > 0 || symptoms.length > 0 || activities.length > 0;
+
+  const headline = !hasAnyData
+    ? `Ainda não há nada registrado para ${profileName}. Comece por um exame, uma medição ou uma atividade.`
+    : `${latestScore !== null ? `${latestScore} de 100 nos exames` : "sem exames ainda"} · ${weeklyMinutes} min de atividade essa semana · acompanhamento em ${consistencyPct}% dos últimos 30 dias.`;
+
+  return (
+    <div>
+      <div className="rounded-3xl bg-slate-900 p-6 sm:p-8 mb-6 flex flex-col sm:flex-row items-center gap-6 sm:gap-8">
+        <VitalRings scorePct={latestScore} activityPct={activityPct} consistencyPct={consistencyPct} />
+        <div className="text-center sm:text-left">
+          <p className="text-teal-300 text-xs uppercase tracking-[0.2em] mb-2">Painel de {profileName}</p>
+          <p className="text-white text-lg sm:text-xl leading-snug mb-4" style={{ fontFamily: '"Fraunces", serif' }}>
+            {headline}
+          </p>
+          <div className="flex flex-wrap justify-center sm:justify-start gap-4 text-xs text-white/70">
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-teal-400" /> Score de exames</span>
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-rose-400" /> Atividade da semana</span>
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400" /> Consistência de registro</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <DashboardCard title="Tendência do score" onClick={() => onGoTo("exames")}>
+          <div className="flex items-end gap-2 mb-1">
+            <span className="text-2xl font-medium text-slate-900" style={{ fontFamily: '"Fraunces", serif' }}>{latestScore ?? "—"}</span>
+            {scoreTrend !== null && scoreTrend !== 0 && (
+              <span className={`flex items-center text-xs mb-1 ${scoreTrend > 0 ? "text-emerald-600" : "text-red-600"}`}>
+                {scoreTrend > 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />} {Math.abs(scoreTrend)}
+              </span>
+            )}
+          </div>
+          <MiniSparkline points={scoreHistory} color="#2dd4bf" />
+        </DashboardCard>
+
+        <DashboardCard title="Composição corporal" onClick={() => onGoTo("corpo")}>
+          <div className="flex items-end gap-2 mb-1">
+            <span className="text-2xl font-medium text-slate-900" style={{ fontFamily: '"Fraunces", serif' }}>
+              {latestBody?.weightKg ?? "—"}<span className="text-sm text-slate-400 ml-1">kg</span>
+            </span>
+            {weightTrend !== null && weightTrend !== 0 && (
+              <span className={`flex items-center text-xs mb-1 ${weightTrend > 0 ? "text-amber-600" : "text-emerald-600"}`}>
+                {weightTrend > 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />} {Math.abs(weightTrend)}
+              </span>
+            )}
+          </div>
+          <MiniSparkline points={weightHistory} color="#fb7185" />
+        </DashboardCard>
+
+        <DashboardCard title="Atividade da semana" onClick={() => onGoTo("atividades")}>
+          <div className="flex items-end gap-2 mb-2">
+            <span className="text-2xl font-medium text-slate-900" style={{ fontFamily: '"Fraunces", serif' }}>{weeklyMinutes}</span>
+            <span className="text-sm text-slate-400 mb-1">min</span>
+          </div>
+          <WeeklyBars days={last7Days} />
+        </DashboardCard>
+
+        <DashboardCard title="Sintomas ativos" onClick={() => onGoTo("sintomas")}>
+          <div className="flex items-end gap-2 mb-2">
+            <span className="text-2xl font-medium text-slate-900" style={{ fontFamily: '"Fraunces", serif' }}>{activeSymptoms.length}</span>
+          </div>
+          {activeSymptoms.length === 0 ? (
+            <p className="text-xs text-slate-400">Nenhum sintoma ativo</p>
+          ) : (
+            <div className="space-y-1">
+              {activeSymptoms.slice(0, 2).map((s) => (
+                <p key={s.id} className="text-xs text-slate-500 truncate">{s.description}</p>
+              ))}
+            </div>
+          )}
+        </DashboardCard>
+      </div>
+
+      <button
+        onClick={onOpenTips}
+        className="w-full flex items-center justify-between gap-3 bg-slate-50 hover:bg-slate-100 transition border border-slate-200 rounded-xl px-4 py-3"
+      >
+        <span className="flex items-center gap-2 text-sm text-slate-700"><Bell size={15} /> Dicas de saúde e sugestão de exames, cruzando tudo isso com IA</span>
+        <ChevronRight size={16} className="text-slate-400 shrink-0" />
+      </button>
     </div>
   );
 }
