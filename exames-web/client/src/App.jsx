@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-21k · fotos de composição corporal agora ficam guardadas (ícone de câmera pra ver a original)";
+const APP_BUILD = "2026-07-21l · Painel corrigido: score e peso agora consideram todos os laudos/medições, não só os mais recentes";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -914,6 +914,7 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
         <DashboardScreen
           profileId={profile.id}
           profileName={profile.name}
+          profile={profile}
           hasSuggestions={hasSuggestions}
           onOpenTips={() => setTipsOpen(true)}
           onGoTo={(t) => setTab(t)}
@@ -2854,7 +2855,7 @@ function DashboardCard({ title, onClick, children }) {
   );
 }
 
-function DashboardScreen({ profileId, profileName, hasSuggestions, onOpenTips, onGoTo }) {
+function DashboardScreen({ profileId, profileName, profile, hasSuggestions, onOpenTips, onGoTo }) {
   const [loading, setLoading] = useState(true);
   const [index, setIndex] = useState([]);
   const [batches, setBatches] = useState({});
@@ -2886,24 +2887,35 @@ function DashboardScreen({ profileId, profileName, hasSuggestions, onOpenTips, o
     return <div className="flex justify-center py-16 text-slate-400"><Loader2 className="animate-spin" size={22} /></div>;
   }
 
-  const orderedBatchIds = index.map((b) => b.batchId);
-  const scoreHistory = orderedBatchIds
-    .map((id) => batches[id])
-    .filter(Boolean)
-    .map((b) => ({ date: b.date, value: computeScore(b.results) }))
-    .filter((x) => x.value !== null)
-    .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const orderedBatchIds = index.map((b) => b.batchId); // já vem do servidor ordenado do mais recente pro mais antigo
+  // O "Score de saúde" precisa refletir TODOS os exames já feitos (mesma lógica da aba Exames:
+  // o valor mais recente de cada exame, não só os exames do último laudo). Antes disso, se o
+  // laudo mais recente tivesse poucos exames (ex: só 2 de rotina), o score saía de lá mesmo
+  // que outros exames alterados estivessem em laudos anteriores — dando um número enganoso.
+  // Para o histórico do gráfico, recalculamos o score "acumulado até aquele laudo" a cada
+  // ponto, pra mostrar a evolução de forma consistente com o valor atual.
+  const batchIdsAsc = orderedBatchIds.slice().reverse();
+  const scoreHistory = [];
+  for (let i = 0; i < batchIdsAsc.length; i++) {
+    const idsUpToHereDesc = batchIdsAsc.slice(0, i + 1).reverse();
+    const mergedSoFar = mergeLatestExamResults(idsUpToHereDesc, batches);
+    const score = computeScore(mergedSoFar);
+    const batch = batches[batchIdsAsc[i]];
+    if (score !== null && batch) scoreHistory.push({ date: batch.date, value: score });
+  }
   const latestScore = scoreHistory.length ? scoreHistory[scoreHistory.length - 1].value : null;
   const scoreTrend = scoreHistory.length >= 2 ? scoreHistory[scoreHistory.length - 1].value - scoreHistory[scoreHistory.length - 2].value : null;
 
-  const withImcEntries = withImc(bodyEntries);
-  const latestBody = withImcEntries.length ? withImcEntries[withImcEntries.length - 1] : null;
-  const prevBody = withImcEntries.length > 1 ? withImcEntries[withImcEntries.length - 2] : null;
+  const withImcEntries = withImc(bodyEntries, profile?.heightCm);
+  // Mesma correção da aba Saúde física: pega o valor mais recente de CADA item, não só os
+  // campos que vieram na última medição cadastrada (que podia não ter peso, por exemplo).
+  const latestBody = withImcEntries.length ? mergeLatestBodyFields(withImcEntries, profile?.heightCm) : null;
   const weightHistory = withImcEntries
     .filter((e) => e.weightKg !== null && e.weightKg !== undefined)
     .map((e) => ({ date: e.date, value: e.weightKg }));
-  const weightTrend = latestBody && prevBody && latestBody.weightKg != null && prevBody.weightKg != null
-    ? Math.round((latestBody.weightKg - prevBody.weightKg) * 10) / 10 : null;
+  const [, prevWeight] = latestTwoValues(withImcEntries, "weightKg");
+  const weightTrend = latestBody?.weightKg != null && prevWeight != null
+    ? Math.round((latestBody.weightKg - prevWeight) * 10) / 10 : null;
 
   const last7Days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date();
