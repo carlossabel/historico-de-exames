@@ -93,6 +93,7 @@ const BODY_INDICATORS = [
   { key: "imc", label: "IMC", unit: "", decimals: 1, computed: true },
   { key: "bodyFatPct", label: "Gordura corporal", unit: "%", decimals: 1 },
   { key: "muscleMassKg", label: "Massa muscular", unit: "kg", decimals: 1 },
+  { key: "proteinPct", label: "Proteína", unit: "%", decimals: 1 },
   { key: "visceralFat", label: "Gordura visceral", unit: "", decimals: 0 },
   { key: "boneMassKg", label: "Massa óssea", unit: "kg", decimals: 2 },
   { key: "bodyWaterPct", label: "Água corporal", unit: "%", decimals: 1 },
@@ -100,6 +101,7 @@ const BODY_INDICATORS = [
   { key: "heightCm", label: "Altura", unit: "cm", decimals: 1 },
   { key: "bloodPressure", label: "Pressão arterial", unit: "mmHg", decimals: 0, isBloodPressure: true },
   { key: "restingHeartRate", label: "Frequência cardíaca em repouso", unit: "bpm", decimals: 0 },
+  { key: "bodyAge", label: "Idade corporal", unit: "anos", decimals: 0, computed: true },
 ];
 
 function withImc(entries) {
@@ -195,6 +197,10 @@ export default function App() {
     setScreen({ name: "home" });
   };
 
+  const updateProfileInfo = (updated) => {
+    setProfiles((prev) => (prev || []).map((p) => (p.id === updated.id ? updated : p)));
+  };
+
   if (profiles === null) {
     return (
       <div className="flex items-center justify-center py-20 text-slate-400">
@@ -219,6 +225,7 @@ export default function App() {
             profile={profiles.find((p) => p.id === screen.profileId)}
             initialTab={screen.initialTab}
             onBack={() => setScreen({ name: "home" })}
+            onProfileUpdate={updateProfileInfo}
           />
         ) : (
           <div className="flex items-center justify-center py-20 text-slate-400">
@@ -343,6 +350,77 @@ function AddProfileModal({ onClose, onConfirm }) {
   );
 }
 
+function EditProfileModal({ profile, onClose, onSave }) {
+  const [name, setName] = useState(profile.name || "");
+  const [birthDate, setBirthDate] = useState(profile.birthDate || "");
+  const [gender, setGender] = useState(profile.gender || "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleSave = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave({ name: name.trim(), birthDate: birthDate || null, gender: gender || null });
+    } catch (e) {
+      setError(e.message || "Erro ao salvar perfil.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell onClose={onClose} title="Editar perfil">
+      <label className="text-xs text-slate-500 mb-1 block">Nome da pessoa</label>
+      <input
+        autoFocus
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-300"
+      />
+      <div className="grid grid-cols-2 gap-3 mb-2">
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Data de nascimento</label>
+          <input
+            type="date"
+            value={birthDate}
+            onChange={(e) => setBirthDate(e.target.value)}
+            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Sexo</label>
+          <select value={gender} onChange={(e) => setGender(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+            <option value="">Não informar</option>
+            <option value="F">Feminino</option>
+            <option value="M">Masculino</option>
+          </select>
+        </div>
+      </div>
+      <p className="text-xs text-slate-400 mb-4">
+        Data de nascimento e sexo são usados só para a IA estimar a "idade corporal" na aba Saúde física — nenhum dado é obrigatório.
+      </p>
+      {error && (
+        <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <button onClick={onClose} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
+        <button
+          disabled={!name.trim() || saving}
+          onClick={handleSave}
+          className="flex items-center gap-1.5 text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
+        >
+          {saving && <Loader2 size={14} className="animate-spin" />}
+          {saving ? "Salvando..." : "Salvar"}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
 function ModalShell({ onClose, title, children, wide }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(15,23,42,0.4)" }} onClick={onClose}>
@@ -443,7 +521,7 @@ function ImportModal({ onClose, onDone }) {
   );
 }
 
-function ProfileScreen({ profile, onBack, initialTab }) {
+function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
   const [index, setIndex] = useState(null);
   const [batches, setBatches] = useState({});
   const [uploading, setUploading] = useState(false);
@@ -453,6 +531,7 @@ function ProfileScreen({ profile, onBack, initialTab }) {
   const [selectedExam, setSelectedExam] = useState(null);
   const [alertsInfo, setAlertsInfo] = useState(null);
   const [tab, setTab] = useState(initialTab || "painel");
+  const [editProfileOpen, setEditProfileOpen] = useState(false);
   const fileInputRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -473,6 +552,12 @@ function ProfileScreen({ profile, onBack, initialTab }) {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { refreshAlerts(); }, [refreshAlerts]);
+
+  const saveProfileEdit = async (payload) => {
+    const updated = await api.updateProfile(profile.id, payload);
+    onProfileUpdate(updated);
+    setEditProfileOpen(false);
+  };
 
   const handleFile = async (file) => {
     setUploadError(null);
@@ -554,7 +639,12 @@ function ProfileScreen({ profile, onBack, initialTab }) {
         <div className="flex items-center gap-3">
           <div className={`w-11 h-11 rounded-full ${c.bg} ${c.text} flex items-center justify-center font-medium text-sm`}>{initials(profile.name)}</div>
           <div>
-            <h1 className="text-lg font-medium text-slate-900">{profile.name}</h1>
+            <div className="flex items-center gap-1.5">
+              <h1 className="text-lg font-medium text-slate-900">{profile.name}</h1>
+              <button onClick={() => setEditProfileOpen(true)} className="text-slate-300 hover:text-slate-600" aria-label="Editar perfil">
+                <Pencil size={13} />
+              </button>
+            </div>
             <p className="text-xs text-slate-400">{index.length} laudo{index.length !== 1 ? "s" : ""} no histórico</p>
           </div>
         </div>
@@ -646,6 +736,8 @@ function ProfileScreen({ profile, onBack, initialTab }) {
       {selectedExam && <ExamEvolutionModal examName={selectedExam} orderedBatchIds={orderedBatchIds} batches={batches} profileId={profile.id} onClose={() => setSelectedExam(null)} />}
 
       {reviewData && <ReviewModal data={reviewData} onCancel={() => setReviewData(null)} onConfirm={saveBatch} />}
+
+      {editProfileOpen && <EditProfileModal profile={profile} onClose={() => setEditProfileOpen(false)} onSave={saveProfileEdit} />}
 
       {tipsOpen && (
         <TipsModal
@@ -1379,7 +1471,7 @@ function BodyCompositionScreen({ profileId }) {
         throw new Error("Essa imagem passa de 8MB — tente uma foto menor.");
       }
       const extracted = await api.extractBodyPhoto(profileId, file);
-      const anyValue = ["weightKg", "heightCm", "bodyFatPct", "muscleMassKg", "visceralFat", "boneMassKg", "bodyWaterPct", "bmrKcal", "systolicBp", "diastolicBp", "restingHeartRate"]
+      const anyValue = ["weightKg", "heightCm", "bodyFatPct", "muscleMassKg", "visceralFat", "boneMassKg", "bodyWaterPct", "proteinPct", "bmrKcal", "systolicBp", "diastolicBp", "restingHeartRate"]
         .some((k) => extracted[k] !== null && extracted[k] !== undefined);
       if (!anyValue) {
         throw new Error("Não consegui ler nenhum valor legível nessa foto. Tente uma foto mais nítida ou adicione manualmente.");
@@ -1394,6 +1486,7 @@ function BodyCompositionScreen({ profileId }) {
         visceralFat: extracted.visceralFat ?? "",
         boneMassKg: extracted.boneMassKg ?? "",
         bodyWaterPct: extracted.bodyWaterPct ?? "",
+        proteinPct: extracted.proteinPct ?? "",
         bmrKcal: extracted.bmrKcal ?? "",
         systolicBp: extracted.systolicBp ?? "",
         diastolicBp: extracted.diastolicBp ?? "",
@@ -1501,7 +1594,7 @@ function BodyCompositionScreen({ profileId }) {
             })}
           </div>
 
-          <div className="grid grid-cols-2 gap-3 mb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
             <button
               onClick={() => setSelectedIndicator("bloodPressure")}
               className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "bloodPressure" ? "ring-2 ring-slate-300" : ""}`}
@@ -1522,6 +1615,26 @@ function BodyCompositionScreen({ profileId }) {
               <div className="flex items-end gap-1.5">
                 <span className="text-xl font-medium text-slate-900">{fmtNum(latest?.restingHeartRate, 0)}</span>
                 <span className="text-xs text-slate-400 mb-0.5">bpm</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedIndicator("proteinPct")}
+              className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "proteinPct" ? "ring-2 ring-slate-300" : ""}`}
+            >
+              <p className="text-xs text-slate-500 mb-1">Proteína</p>
+              <div className="flex items-end gap-1.5">
+                <span className="text-xl font-medium text-slate-900">{fmtNum(latest?.proteinPct, 1)}</span>
+                <span className="text-xs text-slate-400 mb-0.5">%</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedIndicator("bodyAge")}
+              className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "bodyAge" ? "ring-2 ring-slate-300" : ""}`}
+            >
+              <p className="text-xs text-slate-500 mb-1 flex items-center gap-1"><Sparkles size={11} /> Idade corporal</p>
+              <div className="flex items-end gap-1.5">
+                <span className="text-xl font-medium text-slate-900">{fmtNum(latest?.bodyAge, 0)}</span>
+                <span className="text-xs text-slate-400 mb-0.5">anos</span>
               </div>
             </button>
           </div>
@@ -1553,6 +1666,8 @@ function BodyCompositionScreen({ profileId }) {
                   {e.imc !== null && <span className="text-xs text-slate-400">IMC {fmtNum(e.imc, 1)}</span>}
                   {e.bodyFatPct !== null && <span className="text-xs text-slate-400">{fmtNum(e.bodyFatPct, 1)}% gordura</span>}
                   {e.muscleMassKg !== null && <span className="text-xs text-slate-400">{fmtNum(e.muscleMassKg, 1)} kg músculo</span>}
+                  {e.proteinPct !== null && <span className="text-xs text-slate-400">{fmtNum(e.proteinPct, 1)}% proteína</span>}
+                  {e.bodyAge !== null && e.bodyAge !== undefined && <span className="text-xs text-slate-400">idade corporal {fmtNum(e.bodyAge, 0)}</span>}
                   {e.systolicBp !== null && e.diastolicBp !== null && (
                     <span className="text-xs text-slate-400">{fmtNum(e.systolicBp, 0)}/{fmtNum(e.diastolicBp, 0)} mmHg</span>
                   )}
@@ -1641,6 +1756,7 @@ const BODY_FORM_FIELDS = [
   { key: "heightCm", label: "Altura (cm)", step: "0.1" },
   { key: "bodyFatPct", label: "Gordura corporal (%)", step: "0.1" },
   { key: "muscleMassKg", label: "Massa muscular (kg)", step: "0.1" },
+  { key: "proteinPct", label: "Proteína (%)", step: "0.1" },
   { key: "visceralFat", label: "Gordura visceral", step: "1" },
   { key: "boneMassKg", label: "Massa óssea (kg)", step: "0.01" },
   { key: "bodyWaterPct", label: "Água corporal (%)", step: "0.1" },
@@ -1655,6 +1771,7 @@ function BodyEntryModal({ entry, onCancel, onSave }) {
     heightCm: entry.heightCm ?? "",
     bodyFatPct: entry.bodyFatPct ?? "",
     muscleMassKg: entry.muscleMassKg ?? "",
+    proteinPct: entry.proteinPct ?? "",
     visceralFat: entry.visceralFat ?? "",
     boneMassKg: entry.boneMassKg ?? "",
     bodyWaterPct: entry.bodyWaterPct ?? "",

@@ -3,13 +3,24 @@ export async function getProfiles() {
   return r.json();
 }
 
-export async function createProfile(name) {
+export async function createProfile(name, extra = {}) {
   const r = await fetch("/api/profiles", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, ...extra }),
   });
   return r.json();
+}
+
+export async function updateProfile(profileId, payload) {
+  const r = await fetch(`/api/profiles/${profileId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao atualizar perfil");
+  return data;
 }
 
 export async function deleteProfile(id) {

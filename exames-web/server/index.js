@@ -6,7 +6,7 @@ import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import db, { pdfDir } from "./db.js";
-import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, BODY_PHOTO_EXTRACTION_PROMPT } from "./anthropic.js";
+import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, buildBodyAgePrompt, BODY_PHOTO_EXTRACTION_PROMPT } from "./anthropic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -23,20 +23,35 @@ function uid() {
 // ---------- Profiles ----------
 app.get("/api/profiles", (req, res) => {
   const rows = db
-    .prepare("SELECT id, name, color_idx as colorIdx, created_at as createdAt FROM profiles ORDER BY created_at ASC")
+    .prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, created_at as createdAt FROM profiles ORDER BY created_at ASC")
     .all();
   res.json(rows);
 });
 
 app.post("/api/profiles", (req, res) => {
-  const { name } = req.body || {};
+  const { name, birthDate, gender } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: "Nome obrigatório" });
   const count = db.prepare("SELECT COUNT(*) as c FROM profiles").get().c;
   const id = uid();
   const colorIdx = count % 8;
   const createdAt = Date.now();
-  db.prepare("INSERT INTO profiles (id, name, color_idx, created_at) VALUES (?, ?, ?, ?)").run(id, name.trim(), colorIdx, createdAt);
-  res.json({ id, name: name.trim(), colorIdx, createdAt });
+  db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
+    id, name.trim(), colorIdx, birthDate || null, gender || null, createdAt
+  );
+  res.json({ id, name: name.trim(), colorIdx, birthDate: birthDate || null, gender: gender || null, createdAt });
+});
+
+app.put("/api/profiles/:id", (req, res) => {
+  const { id } = req.params;
+  const existing = db.prepare("SELECT id FROM profiles WHERE id = ?").get(id);
+  if (!existing) return res.status(404).json({ error: "Perfil não encontrado" });
+  const { name, birthDate, gender } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: "Nome obrigatório" });
+  db.prepare("UPDATE profiles SET name = ?, birth_date = ?, gender = ? WHERE id = ?").run(
+    name.trim(), birthDate || null, gender || null, id
+  );
+  const row = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, created_at as createdAt FROM profiles WHERE id = ?").get(id);
+  res.json(row);
 });
 
 app.delete("/api/profiles/:id", (req, res) => {
@@ -131,6 +146,8 @@ function rowToBodyEntry(r) {
     systolicBp: r.systolic_bp,
     diastolicBp: r.diastolic_bp,
     restingHeartRate: r.resting_heart_rate,
+    proteinPct: r.protein_pct,
+    bodyAge: r.body_age,
     notes: r.notes,
     savedAt: r.saved_at,
   };
@@ -142,6 +159,51 @@ function numOrNull(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Idade cronológica a partir da data de nascimento (anos completos).
+function ageFromBirthDate(birthDate) {
+  if (!birthDate) return null;
+  const b = new Date(birthDate);
+  if (isNaN(b.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - b.getFullYear();
+  const hasHadBirthdayThisYear = now.getMonth() > b.getMonth() || (now.getMonth() === b.getMonth() && now.getDate() >= b.getDate());
+  if (!hasHadBirthdayThisYear) age -= 1;
+  return age;
+}
+
+// Calcula (via IA) a "idade corporal" estimada dessa medição e já grava no banco.
+// Só roda se o perfil tiver data de nascimento (idade é a referência mínima necessária).
+// Qualquer falha aqui é silenciosa — a medição já foi salva independente disso.
+async function computeAndStoreBodyAge(profileId, entryId, entryRow) {
+  try {
+    const profile = db.prepare("SELECT birth_date, gender FROM profiles WHERE id = ?").get(profileId);
+    if (!profile || !profile.birth_date) return;
+    const chronologicalAge = ageFromBirthDate(profile.birth_date);
+    if (chronologicalAge === null) return;
+
+    const imc =
+      entryRow.weight_kg && entryRow.height_cm ? Math.round((entryRow.weight_kg / ((entryRow.height_cm / 100) ** 2)) * 10) / 10 : null;
+
+    const metrics = {
+      weightKg: entryRow.weight_kg, heightCm: entryRow.height_cm, bodyFatPct: entryRow.body_fat_pct,
+      muscleMassKg: entryRow.muscle_mass_kg, visceralFat: entryRow.visceral_fat, bodyWaterPct: entryRow.body_water_pct,
+      proteinPct: entryRow.protein_pct, bmrKcal: entryRow.bmr_kcal, restingHeartRate: entryRow.resting_heart_rate, imc,
+    };
+    // Sem nenhuma métrica além da idade/sexo não vale a pena gastar uma chamada de IA.
+    if (Object.values(metrics).every((v) => v === null || v === undefined)) return;
+
+    const prompt = buildBodyAgePrompt(chronologicalAge, profile.gender, metrics);
+    const text = await callClaude([{ role: "user", content: prompt }], 400);
+    const parsed = repairJson(text);
+    const bodyAge = numOrNull(parsed.idade_corporal);
+    if (bodyAge !== null) {
+      db.prepare("UPDATE body_entries SET body_age = ? WHERE id = ?").run(bodyAge, entryId);
+    }
+  } catch (e) {
+    console.warn("Não foi possível calcular a idade corporal para a medição", entryId, ":", e.message);
+  }
+}
+
 app.get("/api/profiles/:profileId/body-entries", (req, res) => {
   const { profileId } = req.params;
   const rows = db
@@ -150,7 +212,7 @@ app.get("/api/profiles/:profileId/body-entries", (req, res) => {
   res.json(rows.map(rowToBodyEntry));
 });
 
-app.post("/api/profiles/:profileId/body-entries", (req, res) => {
+app.post("/api/profiles/:profileId/body-entries", async (req, res) => {
   try {
     const { profileId } = req.params;
     const b = req.body || {};
@@ -158,39 +220,43 @@ app.post("/api/profiles/:profileId/body-entries", (req, res) => {
     const id = uid();
     db.prepare(
       `INSERT INTO body_entries
-        (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, systolic_bp, diastolic_bp, resting_heart_rate, notes, saved_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, systolic_bp, diastolic_bp, resting_heart_rate, protein_pct, notes, saved_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).run(
       id, profileId, b.date,
       numOrNull(b.weightKg), numOrNull(b.heightCm), numOrNull(b.bodyFatPct), numOrNull(b.muscleMassKg),
       numOrNull(b.visceralFat), numOrNull(b.boneMassKg), numOrNull(b.bodyWaterPct), numOrNull(b.bmrKcal),
-      numOrNull(b.systolicBp), numOrNull(b.diastolicBp), numOrNull(b.restingHeartRate),
+      numOrNull(b.systolicBp), numOrNull(b.diastolicBp), numOrNull(b.restingHeartRate), numOrNull(b.proteinPct),
       b.notes || "", Date.now()
     );
-    const row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(id);
+    let row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(id);
+    await computeAndStoreBodyAge(profileId, id, row);
+    row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(id);
     res.json(rowToBodyEntry(row));
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao salvar medição" });
   }
 });
 
-app.put("/api/profiles/:profileId/body-entries/:entryId", (req, res) => {
+app.put("/api/profiles/:profileId/body-entries/:entryId", async (req, res) => {
   try {
-    const { entryId } = req.params;
+    const { profileId, entryId } = req.params;
     const b = req.body || {};
     const existing = db.prepare("SELECT id FROM body_entries WHERE id = ?").get(entryId);
     if (!existing) return res.status(404).json({ error: "Medição não encontrada" });
     if (!b.date) return res.status(400).json({ error: "Data da medição é obrigatória" });
     db.prepare(
-      `UPDATE body_entries SET date=?, weight_kg=?, height_cm=?, body_fat_pct=?, muscle_mass_kg=?, visceral_fat=?, bone_mass_kg=?, body_water_pct=?, bmr_kcal=?, systolic_bp=?, diastolic_bp=?, resting_heart_rate=?, notes=? WHERE id=?`
+      `UPDATE body_entries SET date=?, weight_kg=?, height_cm=?, body_fat_pct=?, muscle_mass_kg=?, visceral_fat=?, bone_mass_kg=?, body_water_pct=?, bmr_kcal=?, systolic_bp=?, diastolic_bp=?, resting_heart_rate=?, protein_pct=?, notes=? WHERE id=?`
     ).run(
       b.date,
       numOrNull(b.weightKg), numOrNull(b.heightCm), numOrNull(b.bodyFatPct), numOrNull(b.muscleMassKg),
       numOrNull(b.visceralFat), numOrNull(b.boneMassKg), numOrNull(b.bodyWaterPct), numOrNull(b.bmrKcal),
-      numOrNull(b.systolicBp), numOrNull(b.diastolicBp), numOrNull(b.restingHeartRate),
+      numOrNull(b.systolicBp), numOrNull(b.diastolicBp), numOrNull(b.restingHeartRate), numOrNull(b.proteinPct),
       b.notes || "", entryId
     );
-    const row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(entryId);
+    let row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(entryId);
+    await computeAndStoreBodyAge(profileId, entryId, row);
+    row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(entryId);
     res.json(rowToBodyEntry(row));
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao atualizar medição" });
@@ -855,7 +921,7 @@ app.delete("/api/profiles/:profileId/symptoms/:symptomId", (req, res) => {
 // ---------- Export backup ----------
 app.get("/api/export", (req, res) => {
   try {
-    const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, created_at as createdAt FROM profiles").all();
+    const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, created_at as createdAt FROM profiles").all();
     const backup = { version: 6, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {} };
     for (const p of profiles) {
       const activityRows = db
@@ -915,10 +981,12 @@ app.post("/api/import", (req, res) => {
         profileId = uid(); // avoid id collision with existing data
       }
       const count = db.prepare("SELECT COUNT(*) as c FROM profiles").get().c;
-      db.prepare("INSERT INTO profiles (id, name, color_idx, created_at) VALUES (?,?,?,?)").run(
+      db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, created_at) VALUES (?,?,?,?,?,?)").run(
         profileId,
         p.name || "Sem nome",
         typeof p.colorIdx === "number" ? p.colorIdx : count % 8,
+        p.birthDate || null,
+        p.gender || null,
         p.createdAt || Date.now()
       );
       importedProfiles++;
@@ -950,13 +1018,14 @@ app.post("/api/import", (req, res) => {
       for (const e of bodyList) {
         db.prepare(
           `INSERT INTO body_entries
-            (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, systolic_bp, diastolic_bp, resting_heart_rate, notes, saved_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+            (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, systolic_bp, diastolic_bp, resting_heart_rate, protein_pct, body_age, notes, saved_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         ).run(
           uid(), profileId, e.date || null,
           numOrNull(e.weightKg), numOrNull(e.heightCm), numOrNull(e.bodyFatPct), numOrNull(e.muscleMassKg),
           numOrNull(e.visceralFat), numOrNull(e.boneMassKg), numOrNull(e.bodyWaterPct), numOrNull(e.bmrKcal),
           numOrNull(e.systolicBp), numOrNull(e.diastolicBp), numOrNull(e.restingHeartRate),
+          numOrNull(e.proteinPct), numOrNull(e.bodyAge),
           e.notes || "", Date.now()
         );
         importedBodyEntries++;

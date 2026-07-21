@@ -135,15 +135,52 @@ Responda APENAS com JSON válido, sem markdown, sem texto antes ou depois, no fo
 export const BODY_PHOTO_EXTRACTION_PROMPT = `Você recebe uma foto de uma balança de bioimpedância, de um aparelho de pressão arterial, da tela de um smartwatch, ou do app de saúde/composição corporal de algum desses aparelhos (ex: Mi Fit/Zepp, Renpho, Withings, InBody, Omron, Apple Saúde, etc). Extraia os valores visíveis na imagem.
 
 Responda APENAS com JSON válido, sem markdown, sem comentários, sem texto antes ou depois, no formato exato:
-{"date":"YYYY-MM-DD ou null","weightKg":numero ou null,"heightCm":numero ou null,"bodyFatPct":numero ou null,"muscleMassKg":numero ou null,"visceralFat":numero ou null,"boneMassKg":numero ou null,"bodyWaterPct":numero ou null,"bmrKcal":numero ou null,"systolicBp":numero ou null,"diastolicBp":numero ou null,"restingHeartRate":numero ou null}
+{"date":"YYYY-MM-DD ou null","weightKg":numero ou null,"heightCm":numero ou null,"bodyFatPct":numero ou null,"muscleMassKg":numero ou null,"visceralFat":numero ou null,"boneMassKg":numero ou null,"bodyWaterPct":numero ou null,"proteinPct":numero ou null,"bmrKcal":numero ou null,"systolicBp":numero ou null,"diastolicBp":numero ou null,"restingHeartRate":numero ou null}
 
 Regras:
 - Só preencha um campo se o valor estiver claramente legível na imagem. Se não aparecer ou estiver ilegível, use null — NUNCA invente ou estime um valor.
 - "date": use a data mostrada na tela do app, se houver. Se não houver nenhuma data visível, use null (não assuma a data de hoje).
+- "proteinPct" é o percentual de proteína corporal (bioimpedância), se o aparelho mostrar essa métrica.
 - "systolicBp" e "diastolicBp" são a pressão arterial sistólica e diastólica em mmHg (ex: em "120/80 mmHg", sistólica=120, diastólica=80).
 - "restingHeartRate" é a frequência cardíaca em bpm (batimentos por minuto).
 - Números sempre em kg, cm, %, kcal, mmHg ou bpm conforme o campo (converta se a imagem mostrar outra unidade, ex: libras para kg).
 - Se a imagem não for de nenhum desses aparelhos/apps, ou nenhum valor estiver legível, retorne todos os campos como null.`;
+
+// Idade corporal (idade metabólica): não existe uma fórmula pública única para isso (cada
+// fabricante de balança usa seu próprio algoritmo proprietário). Aqui pedimos pra IA estimar
+// com base em referências gerais de população para idade/sexo — é uma ESTIMATIVA educativa,
+// não uma medição clínica, e o prompt deixa isso explícito na explicação retornada.
+export function buildBodyAgePrompt(chronologicalAge, gender, metrics) {
+  const genderLabel = gender === "M" ? "masculino" : gender === "F" ? "feminino" : "não informado";
+  const lines = [];
+  if (metrics.weightKg != null) lines.push(`Peso: ${metrics.weightKg} kg`);
+  if (metrics.heightCm != null) lines.push(`Altura: ${metrics.heightCm} cm`);
+  if (metrics.bodyFatPct != null) lines.push(`Gordura corporal: ${metrics.bodyFatPct}%`);
+  if (metrics.muscleMassKg != null) lines.push(`Massa muscular: ${metrics.muscleMassKg} kg`);
+  if (metrics.visceralFat != null) lines.push(`Gordura visceral (índice): ${metrics.visceralFat}`);
+  if (metrics.bodyWaterPct != null) lines.push(`Água corporal: ${metrics.bodyWaterPct}%`);
+  if (metrics.proteinPct != null) lines.push(`Proteína corporal: ${metrics.proteinPct}%`);
+  if (metrics.bmrKcal != null) lines.push(`Taxa metabólica basal: ${metrics.bmrKcal} kcal`);
+  if (metrics.restingHeartRate != null) lines.push(`Frequência cardíaca de repouso: ${metrics.restingHeartRate} bpm`);
+  if (metrics.imc != null) lines.push(`IMC: ${metrics.imc}`);
+
+  return `Você estima "idade corporal" (idade metabólica) de forma educativa, comparando a composição corporal de uma pessoa com médias gerais de referência para pessoas da mesma idade e sexo (não é uma medição clínica exata — cada fabricante de balança usa seu próprio algoritmo proprietário; sua estimativa é aproximada).
+
+Idade cronológica real: ${chronologicalAge !== null ? `${chronologicalAge} anos` : "não informada"}
+Sexo: ${genderLabel}
+
+Métricas da medição atual:
+${lines.join("\n") || "Nenhuma métrica numérica disponível além da idade/sexo."}
+
+Responda APENAS com JSON válido, sem markdown, sem comentários, sem texto antes ou depois, no formato exato:
+{"idade_corporal": numero, "explicacao": "1-2 frases curtas explicando por que a idade corporal estimada é mais alta, mais baixa ou próxima da idade real, citando as métricas que mais pesaram"}
+
+Regras:
+- "idade_corporal" é um número inteiro de anos (pode ser igual, maior ou menor que a idade cronológica).
+- Baseie-se em como a composição corporal (gordura, massa muscular, IMC, TMB, frequência cardíaca de repouso) costuma se comparar com médias populacionais por faixa etária e sexo.
+- Se faltarem dados demais para uma estimativa minimamente confiável, ainda assim dê seu melhor palpite, mas deixe isso claro na explicação.
+- Nunca diagnostique doenças. Seja direto, sem markdown. Responda em português.`;
+}
 
 export function buildExamInfoPrompt(examName, latest, historyText) {
   const statusLabel =

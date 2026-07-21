@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS profiles (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   color_idx INTEGER NOT NULL DEFAULT 0,
+  birth_date TEXT,
+  gender TEXT,
   created_at INTEGER NOT NULL
 );
 
@@ -64,6 +66,8 @@ CREATE TABLE IF NOT EXISTS body_entries (
   systolic_bp REAL,
   diastolic_bp REAL,
   resting_heart_rate REAL,
+  protein_pct REAL,
+  body_age REAL,
   notes TEXT,
   saved_at INTEGER NOT NULL
 );
@@ -163,6 +167,22 @@ if (!bodyEntriesCols.includes("diastolic_bp")) {
 }
 if (!bodyEntriesCols.includes("resting_heart_rate")) {
   db.exec("ALTER TABLE body_entries ADD COLUMN resting_heart_rate REAL");
+}
+if (!bodyEntriesCols.includes("protein_pct")) {
+  db.exec("ALTER TABLE body_entries ADD COLUMN protein_pct REAL");
+}
+if (!bodyEntriesCols.includes("body_age")) {
+  db.exec("ALTER TABLE body_entries ADD COLUMN body_age REAL");
+}
+
+// Migração leve: perfis criados antes de existir "idade corporal" não tinham data de
+// nascimento nem sexo — necessários pra IA estimar a idade corporal com alguma referência.
+const profilesCols = db.prepare("PRAGMA table_info(profiles)").all().map((c) => c.name);
+if (!profilesCols.includes("birth_date")) {
+  db.exec("ALTER TABLE profiles ADD COLUMN birth_date TEXT");
+}
+if (!profilesCols.includes("gender")) {
+  db.exec("ALTER TABLE profiles ADD COLUMN gender TEXT");
 }
 
 // Migração leve: bancos criados antes dos sintomas/composição corporal só tinham
