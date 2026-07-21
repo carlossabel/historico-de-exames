@@ -8,6 +8,11 @@ import {
 } from "lucide-react";
 import * as api from "./api.js";
 
+// Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
+// pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
+// Aparece discretamente no rodapé da tela inicial.
+const APP_BUILD = "2026-07-21 · edição de perfil (lápis) + data de nascimento/sexo na criação";
+
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
   A: { label: "Atenção", dot: "bg-amber-500", chip: "bg-amber-100 text-amber-700" },
@@ -361,6 +366,8 @@ function HomeScreen({ profiles, onOpen, onAdd, onRemove, onImport }) {
           onConfirm={() => { onRemove(confirmDelete.id); setConfirmDelete(null); }}
         />
       )}
+
+      <p className="text-center text-[10px] text-slate-300 mt-10">build: {APP_BUILD}</p>
     </div>
   );
 }
