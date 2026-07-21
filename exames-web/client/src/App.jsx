@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-21h · todos os campos (gordura visceral, massa óssea, água corporal, TMB etc.) agora aparecem como card";
+const APP_BUILD = "2026-07-21i · chips ideal/atenção também em gordura visceral, água corporal e TMB (comparada por fórmula)";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -163,6 +163,17 @@ function fmtNum(v, decimals = 1) {
   return Number(v).toLocaleString("pt-BR", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
+function ageFromBirthDateClient(birthDate) {
+  if (!birthDate) return null;
+  const b = new Date(birthDate);
+  if (isNaN(b.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - b.getFullYear();
+  const hadBirthday = now.getMonth() > b.getMonth() || (now.getMonth() === b.getMonth() && now.getDate() >= b.getDate());
+  if (!hadBirthday) age -= 1;
+  return age;
+}
+
 // Classifica cada card como "ideal" / "atencao" / "fora" (mesmas cores já usadas nos exames:
 // verde/amarelo/vermelho), usando faixas de referência gerais e conhecidas publicamente
 // (OMS pro IMC, American Heart Association pra pressão, faixas usuais de bioimpedância pra
@@ -213,9 +224,50 @@ function bodyMetricStatus(key, latest, profile) {
       if (v > 100) return "fora";
       return "atencao"; // abaixo de 60: pode ser bom condicionamento físico OU bradicardia — sinalizamos atenção pela ambiguidade
     }
-    // Massa muscular não entra aqui de propósito: não existe uma faixa "ideal" amplamente aceita
-    // sem outros dados (altura, nível de atividade), então classificar isso seria inventar um
-    // critério sem base — melhor deixar sem selo do que dar um sinal falso.
+    case "visceralFat": {
+      // Escala de "índice de gordura visceral" usada pela maioria das balanças de bioimpedância
+      // (ex: Omron, Tanita): 1-9 saudável, 10-14 alto, 15+ muito alto.
+      const v = latest?.visceralFat;
+      if (v === null || v === undefined) return null;
+      if (v <= 9) return "ideal";
+      if (v <= 14) return "atencao";
+      return "fora";
+    }
+    case "bodyWaterPct": {
+      // Faixas usuais de água corporal total por sexo (bioimpedância). Sem sexo definido,
+      // não classifica.
+      const v = latest?.bodyWaterPct;
+      if (v === null || v === undefined || !gender) return null;
+      if (gender === "F") {
+        if (v >= 45 && v <= 60) return "ideal";
+        return "atencao";
+      }
+      if (v >= 50 && v <= 65) return "ideal";
+      return "atencao";
+    }
+    case "bmrKcal": {
+      // Não existe um número "ideal" fixo de TMB (depende de peso/altura/idade/sexo — uma
+      // pessoa maior naturalmente tem TMB mais alta, o que não é "melhor" nem "pior"). Em vez
+      // de inventar uma faixa, comparamos o valor medido com o esperado pela fórmula de
+      // Mifflin-St Jeor (uma das mais usadas clinicamente) para o peso/altura/idade/sexo da
+      // pessoa — se bater perto do esperado, o valor é consistente; se destoar muito, sinaliza
+      // atenção (pode ser leitura da balança, ou algo fora do padrão).
+      const v = latest?.bmrKcal;
+      const weight = latest?.weightKg;
+      const height = profile?.heightCm;
+      const age = ageFromBirthDateClient(profile?.birthDate);
+      if (v === null || v === undefined || !weight || !height || age === null || !gender) return null;
+      const expected = gender === "F" ? 10 * weight + 6.25 * height - 5 * age - 161 : 10 * weight + 6.25 * height - 5 * age + 5;
+      if (expected <= 0) return null;
+      const pctDiff = Math.abs(v - expected) / expected;
+      if (pctDiff <= 0.1) return "ideal";
+      if (pctDiff <= 0.2) return "atencao";
+      return "fora";
+    }
+    // Massa muscular e massa óssea não entram aqui de propósito: não existe uma faixa "ideal"
+    // amplamente aceita sem outros dados (altura, nível de atividade, estrutura óssea), então
+    // classificar isso seria inventar um critério sem base — melhor deixar sem selo do que dar
+    // um sinal falso.
     default:
       return null;
   }
