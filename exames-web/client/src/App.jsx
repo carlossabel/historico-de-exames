@@ -222,8 +222,8 @@ export default function App() {
     }
   }, []);
 
-  const addProfile = async (name) => {
-    const newProfile = await api.createProfile(name);
+  const addProfile = async (name, extra = {}) => {
+    const newProfile = await api.createProfile(name, extra);
     setProfiles((prev) => [...(prev || []), newProfile]);
     setShowAddProfile(false);
     setScreen({ name: "profile", profileId: newProfile.id });
@@ -367,6 +367,14 @@ function HomeScreen({ profiles, onOpen, onAdd, onRemove, onImport }) {
 
 function AddProfileModal({ onClose, onConfirm }) {
   const [name, setName] = useState("");
+  const [birthDate, setBirthDate] = useState("");
+  const [gender, setGender] = useState("");
+
+  const confirm = () => {
+    if (!name.trim()) return;
+    onConfirm(name.trim(), { birthDate: birthDate || null, gender: gender || null });
+  };
+
   return (
     <ModalShell onClose={onClose} title="Novo perfil">
       <label className="text-xs text-slate-500 mb-1 block">Nome da pessoa</label>
@@ -376,11 +384,33 @@ function AddProfileModal({ onClose, onConfirm }) {
         onChange={(e) => setName(e.target.value)}
         placeholder="Ex: Ana, Pedro, Mãe..."
         className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-300"
-        onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) onConfirm(name.trim()); }}
+        onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) confirm(); }}
       />
+      <div className="grid grid-cols-2 gap-3 mb-1">
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Data de nascimento</label>
+          <input
+            type="date"
+            value={birthDate}
+            onChange={(e) => setBirthDate(e.target.value)}
+            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Sexo</label>
+          <select value={gender} onChange={(e) => setGender(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+            <option value="">Não informar</option>
+            <option value="F">Feminino</option>
+            <option value="M">Masculino</option>
+          </select>
+        </div>
+      </div>
+      <p className="text-xs text-slate-400 mb-4">
+        Opcional — usado só na aba Saúde física, para a IA estimar a "idade corporal". Pode preencher depois também.
+      </p>
       <div className="flex justify-end gap-2">
         <button onClick={onClose} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
-        <button disabled={!name.trim()} onClick={() => onConfirm(name.trim())} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800">
+        <button disabled={!name.trim()} onClick={confirm} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800">
           Criar perfil
         </button>
       </div>
