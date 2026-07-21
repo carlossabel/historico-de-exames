@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-21e · idade metabólica (renomeada, clique recalcula) + sinalizadores ideal/atenção nos cards";
+const APP_BUILD = "2026-07-21f · chips ideal/atenção/fora (igual Exames) + idade metabólica calculada por diferença, não copiando a idade real";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -242,10 +242,11 @@ function bodyMetricStatus(key, latest, profile) {
   }
 }
 
-function StatusDot({ status }) {
+function StatusChip({ status }) {
   if (!status) return null;
-  const cls = status === "ideal" ? "bg-emerald-500" : status === "atencao" ? "bg-amber-500" : "bg-red-500";
-  return <span className={`inline-block w-1.5 h-1.5 rounded-full ${cls}`} />;
+  const meta = STATUS_META[{ ideal: "N", atencao: "A", fora: "F" }[status]];
+  if (!meta) return null;
+  return <span className={`text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap ${meta.chip}`}>{meta.label}</span>;
 }
 
 // Deixa o nome do laboratório mais enxuto pra exibição: corta o que costuma vir depois
@@ -1810,7 +1811,7 @@ function BodyCompositionScreen({ profileId, profile }) {
                   onClick={() => setSelectedIndicator(key)}
                   className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === key ? "ring-2 ring-slate-300" : ""}`}
                 >
-                  <p className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">{meta.label} <StatusDot status={status} /></p>
+                  <p className="text-xs text-slate-500 mb-1">{meta.label}</p>
                   <div className="flex items-end gap-1.5">
                     <span className="text-xl font-medium text-slate-900">{fmtNum(value, meta.decimals)}</span>
                     <span className="text-xs text-slate-400 mb-0.5">{meta.unit}</span>
@@ -1820,6 +1821,7 @@ function BodyCompositionScreen({ profileId, profile }) {
                       {diff > 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />} {fmtNum(Math.abs(diff), meta.decimals)}
                     </span>
                   )}
+                  {status && <div className="mt-1.5"><StatusChip status={status} /></div>}
                 </button>
               );
             })}
@@ -1830,42 +1832,43 @@ function BodyCompositionScreen({ profileId, profile }) {
               onClick={() => setSelectedIndicator("bloodPressure")}
               className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "bloodPressure" ? "ring-2 ring-slate-300" : ""}`}
             >
-              <p className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">Pressão arterial <StatusDot status={bodyMetricStatus("bloodPressure", latest, profile)} /></p>
+              <p className="text-xs text-slate-500 mb-1">Pressão arterial</p>
               <div className="flex items-end gap-1.5">
                 <span className="text-xl font-medium text-slate-900">
                   {latest?.systolicBp != null && latest?.diastolicBp != null ? `${fmtNum(latest.systolicBp, 0)}/${fmtNum(latest.diastolicBp, 0)}` : "—"}
                 </span>
                 <span className="text-xs text-slate-400 mb-0.5">mmHg</span>
               </div>
+              {bodyMetricStatus("bloodPressure", latest, profile) && <div className="mt-1.5"><StatusChip status={bodyMetricStatus("bloodPressure", latest, profile)} /></div>}
             </button>
             <button
               onClick={() => setSelectedIndicator("restingHeartRate")}
               className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "restingHeartRate" ? "ring-2 ring-slate-300" : ""}`}
             >
-              <p className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">Frequência cardíaca em repouso <StatusDot status={bodyMetricStatus("restingHeartRate", latest, profile)} /></p>
+              <p className="text-xs text-slate-500 mb-1">Frequência cardíaca em repouso</p>
               <div className="flex items-end gap-1.5">
                 <span className="text-xl font-medium text-slate-900">{fmtNum(latest?.restingHeartRate, 0)}</span>
                 <span className="text-xs text-slate-400 mb-0.5">bpm</span>
               </div>
+              {bodyMetricStatus("restingHeartRate", latest, profile) && <div className="mt-1.5"><StatusChip status={bodyMetricStatus("restingHeartRate", latest, profile)} /></div>}
             </button>
             <button
               onClick={() => setSelectedIndicator("proteinPct")}
               className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "proteinPct" ? "ring-2 ring-slate-300" : ""}`}
             >
-              <p className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">Proteína <StatusDot status={bodyMetricStatus("proteinPct", latest, profile)} /></p>
+              <p className="text-xs text-slate-500 mb-1">Proteína</p>
               <div className="flex items-end gap-1.5">
                 <span className="text-xl font-medium text-slate-900">{fmtNum(latest?.proteinPct, 1)}</span>
                 <span className="text-xs text-slate-400 mb-0.5">%</span>
               </div>
+              {bodyMetricStatus("proteinPct", latest, profile) && <div className="mt-1.5"><StatusChip status={bodyMetricStatus("proteinPct", latest, profile)} /></div>}
             </button>
             <button
               onClick={handleCardAgeClick}
               disabled={cardAgeLoading}
               className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition disabled:opacity-70 ${selectedIndicator === "bodyAge" ? "ring-2 ring-slate-300" : ""}`}
             >
-              <p className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">
-                <Sparkles size={11} /> Idade metabólica <StatusDot status={bodyMetricStatus("bodyAge", latest, profile)} />
-              </p>
+              <p className="text-xs text-slate-500 mb-1 flex items-center gap-1"><Sparkles size={11} /> Idade metabólica</p>
               <div className="flex items-end gap-1.5">
                 {cardAgeLoading ? (
                   <Loader2 size={18} className="animate-spin text-slate-400" />
@@ -1874,6 +1877,7 @@ function BodyCompositionScreen({ profileId, profile }) {
                 )}
                 <span className="text-xs text-slate-400 mb-0.5">anos</span>
               </div>
+              {bodyMetricStatus("bodyAge", latest, profile) && <div className="mt-1.5"><StatusChip status={bodyMetricStatus("bodyAge", latest, profile)} /></div>}
             </button>
           </div>
 

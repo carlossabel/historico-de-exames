@@ -201,10 +201,11 @@ async function computeBodyAge(profile, entryRow) {
   const prompt = buildBodyAgePrompt(chronologicalAge, profile.gender, metrics);
   const text = await callClaude([{ role: "user", content: prompt }], 400);
   const parsed = repairJson(text);
-  const bodyAge = numOrNull(parsed.idade_corporal);
-  if (bodyAge === null) {
-    return { bodyAge: null, skippedReason: `A IA respondeu, mas sem um número de idade metabólica válido: ${text.slice(0, 200)}` };
+  const diffYears = numOrNull(parsed.diferenca_anos);
+  if (diffYears === null) {
+    return { bodyAge: null, skippedReason: `A IA respondeu, mas sem um número de diferença de idade válido: ${text.slice(0, 200)}` };
   }
+  const bodyAge = Math.max(0, Math.round(chronologicalAge + diffYears));
   return { bodyAge, explicacao: parsed.explicacao || null };
 }
 

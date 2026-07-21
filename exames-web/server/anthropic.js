@@ -146,10 +146,14 @@ Regras:
 - Números sempre em kg, cm, %, kcal, mmHg ou bpm conforme o campo (converta se a imagem mostrar outra unidade, ex: libras para kg).
 - Se a imagem não for de nenhum desses aparelhos/apps, ou nenhum valor estiver legível, retorne todos os campos como null.`;
 
-// Idade corporal (idade metabólica): não existe uma fórmula pública única para isso (cada
-// fabricante de balança usa seu próprio algoritmo proprietário). Aqui pedimos pra IA estimar
-// com base em referências gerais de população para idade/sexo — é uma ESTIMATIVA educativa,
-// não uma medição clínica, e o prompt deixa isso explícito na explicação retornada.
+// Idade metabólica: não existe uma fórmula pública única para isso (cada fabricante de
+// balança usa seu próprio algoritmo proprietário). Aqui pedimos pra IA estimar com base em
+// referências gerais de população para idade/sexo — é uma ESTIMATIVA educativa, não uma
+// medição clínica, e o prompt deixa isso explícito na explicação retornada.
+// IMPORTANTE: pedimos uma DIFERENÇA (anos a mais/menos que a idade real) em vez de pedir
+// direto "a idade metabólica" — isso evita que o modelo só devolva preguiçosamente a mesma
+// idade cronológica que foi informada no prompt. A idade final é calculada aqui no código
+// (idade real + diferença), não confiamos num número absoluto que a IA possa ter copiado.
 export function buildBodyAgePrompt(chronologicalAge, gender, metrics) {
   const genderLabel = gender === "M" ? "masculino" : gender === "F" ? "feminino" : "não informado";
   const lines = [];
@@ -164,7 +168,7 @@ export function buildBodyAgePrompt(chronologicalAge, gender, metrics) {
   if (metrics.restingHeartRate != null) lines.push(`Frequência cardíaca de repouso: ${metrics.restingHeartRate} bpm`);
   if (metrics.imc != null) lines.push(`IMC: ${metrics.imc}`);
 
-  return `Você estima "idade corporal" (idade metabólica) de forma educativa, comparando a composição corporal de uma pessoa com médias gerais de referência para pessoas da mesma idade e sexo (não é uma medição clínica exata — cada fabricante de balança usa seu próprio algoritmo proprietário; sua estimativa é aproximada).
+  return `Você estima "idade metabólica" de forma educativa, comparando a composição corporal de uma pessoa com médias gerais de referência para pessoas da mesma idade e sexo (não é uma medição clínica exata — cada fabricante de balança usa seu próprio algoritmo proprietário; sua estimativa é aproximada).
 
 Idade cronológica real: ${chronologicalAge !== null ? `${chronologicalAge} anos` : "não informada"}
 Sexo: ${genderLabel}
@@ -172,13 +176,17 @@ Sexo: ${genderLabel}
 Métricas da medição atual:
 ${lines.join("\n") || "Nenhuma métrica numérica disponível além da idade/sexo."}
 
+TAREFA (siga nessa ordem, não pule etapas):
+1. Para CADA métrica listada acima, julgue se ela é tipicamente melhor, pior, ou média para alguém da mesma idade/sexo (ex: IMC 22 é ótimo pra qualquer idade; gordura visceral alta é pior que a média; massa muscular alta pra idade é melhor que a média).
+2. Combine esses julgamentos numa única direção geral: o conjunto de métricas, no geral, sugere um corpo mais jovem, mais velho, ou na média para a idade real informada?
+3. Traduza isso num número de anos de diferença — NÃO retorne 0 só porque é mais fácil; só retorne 0 se as métricas realmente indicarem uma condição física típica/mediana para a idade. Métricas visivelmente melhores que a média (ex: gordura corporal baixa, massa muscular alta, IMC ideal, TMB alta, frequência cardíaca de repouso baixa) devem gerar uma diferença NEGATIVA (corpo mais jovem que a idade real); métricas piores que a média devem gerar uma diferença POSITIVA (corpo mais velho). Quanto mais métricas apontarem na mesma direção, maior a diferença (tipicamente entre 3 e 15 anos quando há sinal claro).
+
 Responda APENAS com JSON válido, sem markdown, sem comentários, sem texto antes ou depois, no formato exato:
-{"idade_corporal": numero, "explicacao": "1-2 frases curtas explicando por que a idade corporal estimada é mais alta, mais baixa ou próxima da idade real, citando as métricas que mais pesaram"}
+{"diferenca_anos": numero inteiro (negativo, zero ou positivo), "explicacao": "1-2 frases curtas citando as métricas que mais pesaram e a direção (mais jovem/mais velho/na média) que elas indicam"}
 
 Regras:
-- "idade_corporal" é um número inteiro de anos (pode ser igual, maior ou menor que a idade cronológica).
-- Baseie-se em como a composição corporal (gordura, massa muscular, IMC, TMB, frequência cardíaca de repouso) costuma se comparar com médias populacionais por faixa etária e sexo.
-- Se faltarem dados demais para uma estimativa minimamente confiável, ainda assim dê seu melhor palpite, mas deixe isso claro na explicação.
+- "diferenca_anos" é SEMPRE relativo à idade real informada (ex: -6 significa "6 anos mais jovem que a idade real"; +4 significa "4 anos mais velho").
+- Se faltarem dados demais para uma estimativa minimamente confiável, retorne diferenca_anos: 0 e deixe isso claro na explicação (não invente com base em nada).
 - Nunca diagnostique doenças. Seja direto, sem markdown. Responda em português.`;
 }
 
