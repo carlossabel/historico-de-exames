@@ -6,6 +6,8 @@ const dataDir = path.join(process.cwd(), "data");
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 const pdfDir = path.join(dataDir, "pdfs");
 if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+const bodyPhotoDir = path.join(dataDir, "body-photos");
+if (!fs.existsSync(bodyPhotoDir)) fs.mkdirSync(bodyPhotoDir, { recursive: true });
 
 const db = new Database(path.join(dataDir, "db.sqlite"));
 db.pragma("journal_mode = WAL");
@@ -69,6 +71,8 @@ CREATE TABLE IF NOT EXISTS body_entries (
   resting_heart_rate REAL,
   protein_pct REAL,
   body_age REAL,
+  photo_mime TEXT,
+  has_photo INTEGER NOT NULL DEFAULT 0,
   notes TEXT,
   saved_at INTEGER NOT NULL
 );
@@ -175,6 +179,12 @@ if (!bodyEntriesCols.includes("protein_pct")) {
 if (!bodyEntriesCols.includes("body_age")) {
   db.exec("ALTER TABLE body_entries ADD COLUMN body_age REAL");
 }
+if (!bodyEntriesCols.includes("photo_mime")) {
+  db.exec("ALTER TABLE body_entries ADD COLUMN photo_mime TEXT");
+}
+if (!bodyEntriesCols.includes("has_photo")) {
+  db.exec("ALTER TABLE body_entries ADD COLUMN has_photo INTEGER NOT NULL DEFAULT 0");
+}
 
 // Migração leve: perfis criados antes de existir "idade corporal" não tinham data de
 // nascimento nem sexo — necessários pra IA estimar a idade corporal com alguma referência.
@@ -198,4 +208,4 @@ if (!alertsCols.includes("based_on_signature")) {
 }
 
 export default db;
-export { pdfDir };
+export { pdfDir, bodyPhotoDir };

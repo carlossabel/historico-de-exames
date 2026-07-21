@@ -182,6 +182,10 @@ export async function deleteBodyEntry(profileId, entryId) {
   await fetch(`/api/profiles/${profileId}/body-entries/${entryId}`, { method: "DELETE" });
 }
 
+export function bodyPhotoUrl(profileId, entryId) {
+  return `/api/profiles/${profileId}/body-entries/${entryId}/photo`;
+}
+
 export async function recalcBodyAge(profileId, entryId) {
   const r = await fetch(`/api/profiles/${profileId}/body-entries/${entryId}/recalc-body-age`, { method: "POST" });
   const data = await r.json();

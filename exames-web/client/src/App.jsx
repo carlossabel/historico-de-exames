@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-21j · botão de IA nos cards de Saúde física fora do ideal (explica valor adequado e o que fazer)";
+const APP_BUILD = "2026-07-21k · fotos de composição corporal agora ficam guardadas (ícone de câmera pra ver a original)";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -1719,6 +1719,8 @@ function BodyCompositionScreen({ profileId, profile }) {
         restingHeartRate: extracted.restingHeartRate ?? "",
         notes: "",
         fromPhoto: true,
+        photoBase64: extracted.photoBase64 || null,
+        photoMime: extracted.photoMime || null,
       });
     } catch (e) {
       setPhotoError(e.message || "Não consegui ler essa foto. Tente novamente ou adicione manualmente.");
@@ -1878,7 +1880,7 @@ function BodyCompositionScreen({ profileId, profile }) {
 
           <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
             {withImcEntries.slice().reverse().map((e) => (
-              <BodyEntryRow key={e.id} entry={e} onEdit={setFormEntry} onDelete={setConfirmDelete} />
+              <BodyEntryRow key={e.id} entry={e} profileId={profileId} onEdit={setFormEntry} onDelete={setConfirmDelete} />
             ))}
           </div>
         </>
@@ -1916,7 +1918,7 @@ function BodyCompositionScreen({ profileId, profile }) {
   );
 }
 
-function BodyEntryRow({ entry, onEdit, onDelete }) {
+function BodyEntryRow({ entry, profileId, onEdit, onDelete }) {
   return (
     <div className="px-4 py-2.5">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1933,6 +1935,18 @@ function BodyEntryRow({ entry, onEdit, onDelete }) {
           {entry.restingHeartRate !== null && <span className="text-xs text-slate-400">{fmtNum(entry.restingHeartRate, 0)} bpm</span>}
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {entry.hasPhoto && (
+            <a
+              href={api.bodyPhotoUrl(profileId, entry.id)}
+              target="_blank"
+              rel="noreferrer"
+              className="text-slate-400 hover:text-slate-700 p-1.5 inline-flex"
+              aria-label="Abrir foto original"
+              title="Ver foto original"
+            >
+              <Camera size={14} />
+            </a>
+          )}
           <button onClick={() => onEdit(entry)} className="text-slate-300 hover:text-slate-700 p-1.5" aria-label="Editar medição">
             <Pencil size={14} />
           </button>
@@ -2119,7 +2133,7 @@ function BodyEntryModal({ entry, onCancel, onSave }) {
     setSaving(true);
     setError(null);
     try {
-      await onSave({ ...form, systolicBp, diastolicBp, id: entry.id });
+      await onSave({ ...form, systolicBp, diastolicBp, id: entry.id, photoBase64: entry.photoBase64 || null, photoMime: entry.photoMime || null });
     } catch (e) {
       setError(e.message || "Erro ao salvar medição.");
     } finally {

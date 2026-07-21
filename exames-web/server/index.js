@@ -5,7 +5,7 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
-import db, { pdfDir } from "./db.js";
+import db, { pdfDir, bodyPhotoDir } from "./db.js";
 import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, buildBodyAgePrompt, buildBodyMetricInfoPrompt, BODY_PHOTO_EXTRACTION_PROMPT } from "./anthropic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -64,6 +64,11 @@ app.delete("/api/profiles/:id", (req, res) => {
   }
   db.prepare("DELETE FROM batches WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM alerts WHERE profile_id = ?").run(id);
+  const bodyEntryRows = db.prepare("SELECT id FROM body_entries WHERE profile_id = ?").all(id);
+  for (const e of bodyEntryRows) {
+    const photoPath = path.join(bodyPhotoDir, e.id);
+    if (fs.existsSync(photoPath)) fs.unlinkSync(photoPath);
+  }
   db.prepare("DELETE FROM body_entries WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM symptoms WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM tips_history WHERE profile_id = ?").run(id);
@@ -148,6 +153,7 @@ function rowToBodyEntry(r) {
     restingHeartRate: r.resting_heart_rate,
     proteinPct: r.protein_pct,
     bodyAge: r.body_age,
+    hasPhoto: !!r.has_photo,
     notes: r.notes,
     savedAt: r.saved_at,
   };
@@ -239,15 +245,23 @@ app.post("/api/profiles/:profileId/body-entries", async (req, res) => {
     const b = req.body || {};
     if (!b.date) return res.status(400).json({ error: "Data da medição é obrigatória" });
     const id = uid();
+    let hasPhoto = 0;
+    if (b.photoBase64) {
+      try {
+        fs.writeFileSync(path.join(bodyPhotoDir, id), Buffer.from(b.photoBase64, "base64"));
+        hasPhoto = 1;
+      } catch (e) {}
+    }
     db.prepare(
       `INSERT INTO body_entries
-        (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, systolic_bp, diastolic_bp, resting_heart_rate, protein_pct, notes, saved_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, systolic_bp, diastolic_bp, resting_heart_rate, protein_pct, photo_mime, has_photo, notes, saved_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).run(
       id, profileId, b.date,
       numOrNull(b.weightKg), numOrNull(b.heightCm), numOrNull(b.bodyFatPct), numOrNull(b.muscleMassKg),
       numOrNull(b.visceralFat), numOrNull(b.boneMassKg), numOrNull(b.bodyWaterPct), numOrNull(b.bmrKcal),
       numOrNull(b.systolicBp), numOrNull(b.diastolicBp), numOrNull(b.restingHeartRate), numOrNull(b.proteinPct),
+      hasPhoto ? (b.photoMime || "image/jpeg") : null, hasPhoto,
       b.notes || "", Date.now()
     );
     let row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(id);
@@ -263,16 +277,30 @@ app.put("/api/profiles/:profileId/body-entries/:entryId", async (req, res) => {
   try {
     const { profileId, entryId } = req.params;
     const b = req.body || {};
-    const existing = db.prepare("SELECT id FROM body_entries WHERE id = ?").get(entryId);
+    const existing = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(entryId);
     if (!existing) return res.status(404).json({ error: "Medição não encontrada" });
     if (!b.date) return res.status(400).json({ error: "Data da medição é obrigatória" });
+
+    // Edição normal (via lápis) não manda foto — preserva a que já existia, se houver.
+    // Só troca a foto se vier uma nova (photoBase64) explicitamente.
+    let hasPhoto = existing.has_photo;
+    let photoMime = existing.photo_mime;
+    if (b.photoBase64) {
+      try {
+        fs.writeFileSync(path.join(bodyPhotoDir, entryId), Buffer.from(b.photoBase64, "base64"));
+        hasPhoto = 1;
+        photoMime = b.photoMime || "image/jpeg";
+      } catch (e) {}
+    }
+
     db.prepare(
-      `UPDATE body_entries SET date=?, weight_kg=?, height_cm=?, body_fat_pct=?, muscle_mass_kg=?, visceral_fat=?, bone_mass_kg=?, body_water_pct=?, bmr_kcal=?, systolic_bp=?, diastolic_bp=?, resting_heart_rate=?, protein_pct=?, notes=? WHERE id=?`
+      `UPDATE body_entries SET date=?, weight_kg=?, height_cm=?, body_fat_pct=?, muscle_mass_kg=?, visceral_fat=?, bone_mass_kg=?, body_water_pct=?, bmr_kcal=?, systolic_bp=?, diastolic_bp=?, resting_heart_rate=?, protein_pct=?, photo_mime=?, has_photo=?, notes=? WHERE id=?`
     ).run(
       b.date,
       numOrNull(b.weightKg), numOrNull(b.heightCm), numOrNull(b.bodyFatPct), numOrNull(b.muscleMassKg),
       numOrNull(b.visceralFat), numOrNull(b.boneMassKg), numOrNull(b.bodyWaterPct), numOrNull(b.bmrKcal),
       numOrNull(b.systolicBp), numOrNull(b.diastolicBp), numOrNull(b.restingHeartRate), numOrNull(b.proteinPct),
+      photoMime, hasPhoto,
       b.notes || "", entryId
     );
     let row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(entryId);
@@ -282,6 +310,17 @@ app.put("/api/profiles/:profileId/body-entries/:entryId", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao atualizar medição" });
   }
+});
+
+app.get("/api/profiles/:profileId/body-entries/:entryId/photo", (req, res) => {
+  const { entryId } = req.params;
+  const entry = db.prepare("SELECT photo_mime, has_photo FROM body_entries WHERE id = ?").get(entryId);
+  const photoPath = path.join(bodyPhotoDir, entryId);
+  if (!entry || !entry.has_photo || !fs.existsSync(photoPath)) {
+    return res.status(404).json({ error: "Foto não encontrada" });
+  }
+  res.setHeader("Content-Type", entry.photo_mime || "image/jpeg");
+  fs.createReadStream(photoPath).pipe(res);
 });
 
 app.post("/api/profiles/:profileId/body-entries/:entryId/recalc-body-age", async (req, res) => {
@@ -341,14 +380,17 @@ app.post("/api/profiles/:profileId/body-entries/extract-photo", upload.single("f
       500
     );
     const parsed = repairJson(text);
-    res.json(parsed);
+    res.json({ ...parsed, photoBase64: base64, photoMime: req.file.mimetype });
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao ler a imagem" });
   }
 });
 
 app.delete("/api/profiles/:profileId/body-entries/:entryId", (req, res) => {
-  db.prepare("DELETE FROM body_entries WHERE id = ?").run(req.params.entryId);
+  const { entryId } = req.params;
+  const photoPath = path.join(bodyPhotoDir, entryId);
+  if (fs.existsSync(photoPath)) fs.unlinkSync(photoPath);
+  db.prepare("DELETE FROM body_entries WHERE id = ?").run(entryId);
   res.json({ ok: true });
 });
 
@@ -993,7 +1035,17 @@ app.get("/api/export", (req, res) => {
       const bodyRows = db
         .prepare("SELECT * FROM body_entries WHERE profile_id = ? ORDER BY date ASC, saved_at ASC")
         .all(p.id);
-      backup.bodyEntries[p.id] = bodyRows.map(rowToBodyEntry);
+      backup.bodyEntries[p.id] = bodyRows.map((r) => {
+        const entry = rowToBodyEntry(r);
+        if (r.has_photo) {
+          const photoPath = path.join(bodyPhotoDir, r.id);
+          if (fs.existsSync(photoPath)) {
+            entry.photoBase64 = fs.readFileSync(photoPath).toString("base64");
+            entry.photoMime = r.photo_mime;
+          }
+        }
+        return entry;
+      });
       const batchRows = db
         .prepare("SELECT id as batchId, date, lab, doctor, file_hash as hash, pdf_filename as fileName FROM batches WHERE profile_id = ?")
         .all(p.id);
@@ -1075,16 +1127,25 @@ app.post("/api/import", (req, res) => {
       }
       const bodyList = (bodyEntries && bodyEntries[p.id]) || [];
       for (const e of bodyList) {
+        const bodyEntryId = uid();
+        let hasPhoto = 0;
+        if (e.photoBase64) {
+          try {
+            fs.writeFileSync(path.join(bodyPhotoDir, bodyEntryId), Buffer.from(e.photoBase64, "base64"));
+            hasPhoto = 1;
+          } catch (err) {}
+        }
         db.prepare(
           `INSERT INTO body_entries
-            (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, systolic_bp, diastolic_bp, resting_heart_rate, protein_pct, body_age, notes, saved_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+            (id, profile_id, date, weight_kg, height_cm, body_fat_pct, muscle_mass_kg, visceral_fat, bone_mass_kg, body_water_pct, bmr_kcal, systolic_bp, diastolic_bp, resting_heart_rate, protein_pct, body_age, photo_mime, has_photo, notes, saved_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         ).run(
-          uid(), profileId, e.date || null,
+          bodyEntryId, profileId, e.date || null,
           numOrNull(e.weightKg), numOrNull(e.heightCm), numOrNull(e.bodyFatPct), numOrNull(e.muscleMassKg),
           numOrNull(e.visceralFat), numOrNull(e.boneMassKg), numOrNull(e.bodyWaterPct), numOrNull(e.bmrKcal),
           numOrNull(e.systolicBp), numOrNull(e.diastolicBp), numOrNull(e.restingHeartRate),
           numOrNull(e.proteinPct), numOrNull(e.bodyAge),
+          hasPhoto ? (e.photoMime || "image/jpeg") : null, hasPhoto,
           e.notes || "", Date.now()
         );
         importedBodyEntries++;
