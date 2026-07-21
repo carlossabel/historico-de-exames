@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-21 · edição de perfil (lápis) + data de nascimento/sexo na criação";
+const APP_BUILD = "2026-07-21b · botão 'Editar perfil' com texto + indicador de estado (diagnóstico)";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -714,13 +714,15 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
         <div className="flex items-center gap-3">
           <div className={`w-11 h-11 rounded-full ${c.bg} ${c.text} flex items-center justify-center font-medium text-sm`}>{initials(profile.name)}</div>
           <div>
-            <div className="flex items-center gap-1.5">
-              <h1 className="text-lg font-medium text-slate-900">{profile.name}</h1>
-              <button onClick={() => setEditProfileOpen(true)} className="text-slate-300 hover:text-slate-600" aria-label="Editar perfil">
-                <Pencil size={13} />
-              </button>
-            </div>
+            <h1 className="text-lg font-medium text-slate-900">{profile.name}</h1>
             <p className="text-xs text-slate-400">{index.length} laudo{index.length !== 1 ? "s" : ""} no histórico</p>
+            <button
+              onClick={() => { console.log("Botão Editar perfil clicado"); setEditProfileOpen(true); }}
+              className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 mt-1 border border-slate-300 rounded-full px-2.5 py-1"
+            >
+              <Pencil size={12} /> Editar perfil
+            </button>
+            <span className="text-[10px] text-slate-300 ml-1">[estado: {editProfileOpen ? "aberto" : "fechado"}]</span>
           </div>
         </div>
         {tab === "exames" && (
