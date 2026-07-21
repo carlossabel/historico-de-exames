@@ -179,7 +179,7 @@ function ageFromBirthDate(birthDate) {
 // retorna { skippedReason } quando falta pré-requisito (idade/dado nenhum), sem precisar de IA.
 async function computeBodyAge(profile, entryRow) {
   if (!profile || !profile.birth_date) {
-    return { bodyAge: null, skippedReason: "Defina a data de nascimento no perfil (botão de editar perfil) para calcular a idade corporal." };
+    return { bodyAge: null, skippedReason: "Defina a data de nascimento no perfil (botão de editar perfil) para calcular a idade metabólica." };
   }
   const chronologicalAge = ageFromBirthDate(profile.birth_date);
   if (chronologicalAge === null) {
@@ -203,7 +203,7 @@ async function computeBodyAge(profile, entryRow) {
   const parsed = repairJson(text);
   const bodyAge = numOrNull(parsed.idade_corporal);
   if (bodyAge === null) {
-    return { bodyAge: null, skippedReason: `A IA respondeu, mas sem um número de idade corporal válido: ${text.slice(0, 200)}` };
+    return { bodyAge: null, skippedReason: `A IA respondeu, mas sem um número de idade metabólica válido: ${text.slice(0, 200)}` };
   }
   return { bodyAge, explicacao: parsed.explicacao || null };
 }
@@ -215,12 +215,12 @@ async function computeAndStoreBodyAge(profileId, entryId, entryRow) {
     const profile = db.prepare("SELECT birth_date, gender, height_cm FROM profiles WHERE id = ?").get(profileId);
     const { bodyAge, skippedReason } = await computeBodyAge(profile, entryRow);
     if (skippedReason) {
-      console.warn(`Idade corporal não calculada para a medição ${entryId}: ${skippedReason}`);
+      console.warn(`Idade metabólica não calculada para a medição ${entryId}: ${skippedReason}`);
       return;
     }
     db.prepare("UPDATE body_entries SET body_age = ? WHERE id = ?").run(bodyAge, entryId);
   } catch (e) {
-    console.warn("Não foi possível calcular a idade corporal para a medição", entryId, ":", e.message);
+    console.warn("Não foi possível calcular a idade metabólica para a medição", entryId, ":", e.message);
   }
 }
 
@@ -298,7 +298,7 @@ app.post("/api/profiles/:profileId/body-entries/:entryId/recalc-body-age", async
     const row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(entryId);
     res.json({ ...rowToBodyEntry(row), explicacao });
   } catch (e) {
-    res.status(500).json({ error: e.message || "Erro ao calcular idade corporal" });
+    res.status(500).json({ error: e.message || "Erro ao calcular idade metabólica" });
   }
 });
 

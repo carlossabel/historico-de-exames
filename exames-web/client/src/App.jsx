@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-21d · altura movida para o perfil + botão de recalcular idade corporal";
+const APP_BUILD = "2026-07-21e · idade metabólica (renomeada, clique recalcula) + sinalizadores ideal/atenção nos cards";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -105,7 +105,7 @@ const BODY_INDICATORS = [
   { key: "bmrKcal", label: "Taxa metabólica basal", unit: "kcal", decimals: 0 },
   { key: "bloodPressure", label: "Pressão arterial", unit: "mmHg", decimals: 0, isBloodPressure: true },
   { key: "restingHeartRate", label: "Frequência cardíaca em repouso", unit: "bpm", decimals: 0 },
-  { key: "bodyAge", label: "Idade corporal", unit: "anos", decimals: 0, computed: true },
+  { key: "bodyAge", label: "Idade metabólica", unit: "anos", decimals: 0, computed: true },
 ];
 
 function withImc(entries, profileHeightCm) {
@@ -121,7 +121,7 @@ function withImc(entries, profileHeightCm) {
 }
 
 // Painel da aba Saúde física: junta TODAS as medições (foto ou manual) e, para cada item
-// (peso, %gordura, proteína, idade corporal etc.), usa o valor da aferição mais recente
+// (peso, %gordura, proteína, idade metabólica etc.), usa o valor da aferição mais recente
 // DESSE item específico — não só os campos que vieram na última medição cadastrada.
 // Ex: se peso foi medido dia 10 e % de gordura só foi medido dia 5, o painel mostra os dois,
 // cada um com sua própria data mais recente, em vez de esconder a gordura por não estar no dia 10.
@@ -162,6 +162,90 @@ function latestTwoValues(withImcEntries, key) {
 function fmtNum(v, decimals = 1) {
   if (v === null || v === undefined) return "—";
   return Number(v).toLocaleString("pt-BR", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+function ageFromBirthDateClient(birthDate) {
+  if (!birthDate) return null;
+  const b = new Date(birthDate);
+  if (isNaN(b.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - b.getFullYear();
+  const hadBirthday = now.getMonth() > b.getMonth() || (now.getMonth() === b.getMonth() && now.getDate() >= b.getDate());
+  if (!hadBirthday) age -= 1;
+  return age;
+}
+
+// Classifica cada card como "ideal" / "atencao" / "fora" (mesmas cores já usadas nos exames:
+// verde/amarelo/vermelho), usando faixas de referência gerais e conhecidas publicamente
+// (OMS pro IMC, American Heart Association pra pressão, faixas usuais de bioimpedância pra
+// %gordura/proteína, 60-100bpm como repouso normal). NÃO é avaliação médica personalizada —
+// só o mesmo tipo de referência que qualquer calculadora de IMC ou balança já mostra.
+// Retorna null quando falta dado (peso/altura/sexo) pra classificar com alguma base.
+function bodyMetricStatus(key, latest, profile) {
+  const gender = profile?.gender || null;
+  switch (key) {
+    case "weightKg":
+    case "imc": {
+      const imc = latest?.imc;
+      if (imc === null || imc === undefined) return null;
+      if (imc < 18.5) return "atencao";
+      if (imc < 25) return "ideal";
+      if (imc < 30) return "atencao";
+      return "fora";
+    }
+    case "bodyFatPct": {
+      const v = latest?.bodyFatPct;
+      if (v === null || v === undefined || !gender) return null;
+      if (gender === "F") {
+        if (v < 14 || v > 39) return v > 39 ? "fora" : "atencao";
+        if (v <= 31) return "ideal";
+        return "atencao";
+      }
+      if (v < 6 || v > 31) return v > 31 ? "fora" : "atencao";
+      if (v <= 24) return "ideal";
+      return "atencao";
+    }
+    case "proteinPct": {
+      const v = latest?.proteinPct;
+      if (v === null || v === undefined) return null;
+      if (v >= 16 && v <= 20) return "ideal";
+      return "atencao";
+    }
+    case "bloodPressure": {
+      const sys = latest?.systolicBp, dia = latest?.diastolicBp;
+      if (sys === null || sys === undefined || dia === null || dia === undefined) return null;
+      if (sys < 120 && dia < 80) return "ideal";
+      if (sys < 140 && dia < 90) return "atencao";
+      return "fora";
+    }
+    case "restingHeartRate": {
+      const v = latest?.restingHeartRate;
+      if (v === null || v === undefined) return null;
+      if (v >= 60 && v <= 100) return "ideal";
+      if (v > 100) return "fora";
+      return "atencao"; // abaixo de 60: pode ser bom condicionamento físico OU bradicardia — sinalizamos atenção pela ambiguidade
+    }
+    case "bodyAge": {
+      const bodyAge = latest?.bodyAge;
+      const chronological = ageFromBirthDateClient(profile?.birthDate);
+      if (bodyAge === null || bodyAge === undefined || chronological === null) return null;
+      const diff = bodyAge - chronological;
+      if (diff <= 0) return "ideal";
+      if (diff <= 5) return "atencao";
+      return "fora";
+    }
+    // Massa muscular não entra aqui de propósito: não existe uma faixa "ideal" amplamente aceita
+    // sem outros dados (altura, nível de atividade), então classificar isso seria inventar um
+    // critério sem base — melhor deixar sem selo do que dar um sinal falso.
+    default:
+      return null;
+  }
+}
+
+function StatusDot({ status }) {
+  if (!status) return null;
+  const cls = status === "ideal" ? "bg-emerald-500" : status === "atencao" ? "bg-amber-500" : "bg-red-500";
+  return <span className={`inline-block w-1.5 h-1.5 rounded-full ${cls}`} />;
 }
 
 // Deixa o nome do laboratório mais enxuto pra exibição: corta o que costuma vir depois
@@ -428,7 +512,7 @@ function AddProfileModal({ onClose, onConfirm }) {
         </div>
       </div>
       <p className="text-xs text-slate-400 mb-4">
-        Tudo opcional — usado na aba Saúde física para calcular o IMC e a IA estimar a "idade corporal". Pode preencher depois também.
+        Tudo opcional — usado na aba Saúde física para calcular o IMC e a IA estimar a "idade metabólica". Pode preencher depois também.
       </p>
       <div className="flex justify-end gap-2">
         <button onClick={onClose} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
@@ -501,7 +585,7 @@ function EditProfileModal({ profile, onClose, onSave }) {
         </div>
       </div>
       <p className="text-xs text-slate-400 mb-4">
-        Altura é usada para calcular o IMC. Data de nascimento e sexo são usados pela IA para estimar a "idade corporal" — nada aqui é obrigatório.
+        Altura é usada para calcular o IMC. Data de nascimento e sexo são usados pela IA para estimar a "idade metabólica" — nada aqui é obrigatório.
       </p>
       {error && (
         <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
@@ -1557,6 +1641,8 @@ function BodyCompositionScreen({ profileId, profile }) {
   const [photoLoading, setPhotoLoading] = useState(false);
   const [photoError, setPhotoError] = useState(null);
   const [photoHeightNote, setPhotoHeightNote] = useState(null);
+  const [cardAgeLoading, setCardAgeLoading] = useState(false);
+  const [cardAgeError, setCardAgeError] = useState(null);
   const photoInputRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -1583,8 +1669,8 @@ function BodyCompositionScreen({ profileId, profile }) {
       if (extracted.heightCm !== null && extracted.heightCm !== undefined) {
         setPhotoHeightNote(
           profile?.heightCm
-            ? `Detectei ${extracted.heightCm} cm de altura nessa foto — a altura salva no perfil (${profile.heightCm} cm) é a que vale para IMC e idade corporal. Edite o perfil se precisar corrigir.`
-            : `Detectei ${extracted.heightCm} cm de altura nessa foto. Como a altura agora fica no perfil (não em cada medição), defina-a no botão de editar perfil pra ela contar no IMC e na idade corporal.`
+            ? `Detectei ${extracted.heightCm} cm de altura nessa foto — a altura salva no perfil (${profile.heightCm} cm) é a que vale para IMC e idade metabólica. Edite o perfil se precisar corrigir.`
+            : `Detectei ${extracted.heightCm} cm de altura nessa foto. Como a altura agora fica no perfil (não em cada medição), defina-a no botão de editar perfil pra ela contar no IMC e na idade metabólica.`
         );
       }
       setFormEntry({
@@ -1631,6 +1717,24 @@ function BodyCompositionScreen({ profileId, profile }) {
     await load();
   };
 
+  // Clique no card "Idade metabólica": além de selecionar o gráfico, recalcula usando a
+  // medição mais recente (pode não ser a mesma medição que gerou o valor atual, se por
+  // exemplo o peso mudou numa medição posterior sem idade metabólica calculada ainda).
+  const handleCardAgeClick = async () => {
+    setSelectedIndicator("bodyAge");
+    if (!entries.length) return;
+    const latestEntryId = entries[entries.length - 1].id;
+    setCardAgeLoading(true);
+    setCardAgeError(null);
+    try {
+      await recalcAge(latestEntryId);
+    } catch (e) {
+      setCardAgeError(e.message || "Erro ao calcular idade metabólica.");
+    } finally {
+      setCardAgeLoading(false);
+    }
+  };
+
   if (entries === null) {
     return <div className="flex justify-center py-16 text-slate-400"><Loader2 className="animate-spin" size={22} /></div>;
   }
@@ -1668,7 +1772,7 @@ function BodyCompositionScreen({ profileId, profile }) {
 
       {!profile?.heightCm && (
         <div className="mb-4 flex items-start gap-2 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-          <Info size={13} className="mt-0.5 shrink-0" /> Sem altura definida no perfil, o IMC e a idade corporal não são calculados. Defina a altura no botão de editar perfil (lápis do lado do nome).
+          <Info size={13} className="mt-0.5 shrink-0" /> Sem altura definida no perfil, o IMC e a idade metabólica não são calculados. Defina a altura no botão de editar perfil (lápis do lado do nome).
         </div>
       )}
 
@@ -1699,13 +1803,14 @@ function BodyCompositionScreen({ profileId, profile }) {
               const diff = value !== null && value !== undefined && prevValue !== null && prevValue !== undefined
                 ? Math.round((value - prevValue) * 10) / 10
                 : null;
+              const status = bodyMetricStatus(key, latest, profile);
               return (
                 <button
                   key={key}
                   onClick={() => setSelectedIndicator(key)}
                   className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === key ? "ring-2 ring-slate-300" : ""}`}
                 >
-                  <p className="text-xs text-slate-500 mb-1">{meta.label}</p>
+                  <p className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">{meta.label} <StatusDot status={status} /></p>
                   <div className="flex items-end gap-1.5">
                     <span className="text-xl font-medium text-slate-900">{fmtNum(value, meta.decimals)}</span>
                     <span className="text-xs text-slate-400 mb-0.5">{meta.unit}</span>
@@ -1720,12 +1825,12 @@ function BodyCompositionScreen({ profileId, profile }) {
             })}
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-2">
             <button
               onClick={() => setSelectedIndicator("bloodPressure")}
               className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "bloodPressure" ? "ring-2 ring-slate-300" : ""}`}
             >
-              <p className="text-xs text-slate-500 mb-1">Pressão arterial</p>
+              <p className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">Pressão arterial <StatusDot status={bodyMetricStatus("bloodPressure", latest, profile)} /></p>
               <div className="flex items-end gap-1.5">
                 <span className="text-xl font-medium text-slate-900">
                   {latest?.systolicBp != null && latest?.diastolicBp != null ? `${fmtNum(latest.systolicBp, 0)}/${fmtNum(latest.diastolicBp, 0)}` : "—"}
@@ -1737,7 +1842,7 @@ function BodyCompositionScreen({ profileId, profile }) {
               onClick={() => setSelectedIndicator("restingHeartRate")}
               className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "restingHeartRate" ? "ring-2 ring-slate-300" : ""}`}
             >
-              <p className="text-xs text-slate-500 mb-1">Frequência cardíaca em repouso</p>
+              <p className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">Frequência cardíaca em repouso <StatusDot status={bodyMetricStatus("restingHeartRate", latest, profile)} /></p>
               <div className="flex items-end gap-1.5">
                 <span className="text-xl font-medium text-slate-900">{fmtNum(latest?.restingHeartRate, 0)}</span>
                 <span className="text-xs text-slate-400 mb-0.5">bpm</span>
@@ -1747,23 +1852,38 @@ function BodyCompositionScreen({ profileId, profile }) {
               onClick={() => setSelectedIndicator("proteinPct")}
               className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "proteinPct" ? "ring-2 ring-slate-300" : ""}`}
             >
-              <p className="text-xs text-slate-500 mb-1">Proteína</p>
+              <p className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">Proteína <StatusDot status={bodyMetricStatus("proteinPct", latest, profile)} /></p>
               <div className="flex items-end gap-1.5">
                 <span className="text-xl font-medium text-slate-900">{fmtNum(latest?.proteinPct, 1)}</span>
                 <span className="text-xs text-slate-400 mb-0.5">%</span>
               </div>
             </button>
             <button
-              onClick={() => setSelectedIndicator("bodyAge")}
-              className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === "bodyAge" ? "ring-2 ring-slate-300" : ""}`}
+              onClick={handleCardAgeClick}
+              disabled={cardAgeLoading}
+              className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition disabled:opacity-70 ${selectedIndicator === "bodyAge" ? "ring-2 ring-slate-300" : ""}`}
             >
-              <p className="text-xs text-slate-500 mb-1 flex items-center gap-1"><Sparkles size={11} /> Idade corporal</p>
+              <p className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">
+                <Sparkles size={11} /> Idade metabólica <StatusDot status={bodyMetricStatus("bodyAge", latest, profile)} />
+              </p>
               <div className="flex items-end gap-1.5">
-                <span className="text-xl font-medium text-slate-900">{fmtNum(latest?.bodyAge, 0)}</span>
+                {cardAgeLoading ? (
+                  <Loader2 size={18} className="animate-spin text-slate-400" />
+                ) : (
+                  <span className="text-xl font-medium text-slate-900">{fmtNum(latest?.bodyAge, 0)}</span>
+                )}
                 <span className="text-xs text-slate-400 mb-0.5">anos</span>
               </div>
             </button>
           </div>
+
+          <p className="text-xs text-slate-400 mb-4">Clique no card para recalcular · faixas de referência são gerais, não substituem avaliação médica.</p>
+
+          {cardAgeError && (
+            <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {cardAgeError}
+            </div>
+          )}
 
           <div className="border border-slate-200 rounded-xl p-4 mb-6">
             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -1818,7 +1938,7 @@ function BodyEntryRow({ entry, onEdit, onDelete, onRecalcAge }) {
     try {
       await onRecalcAge(entry.id);
     } catch (e) {
-      setError(e.message || "Erro ao calcular idade corporal.");
+      setError(e.message || "Erro ao calcular idade metabólica.");
     } finally {
       setRecalculating(false);
     }
@@ -1835,11 +1955,11 @@ function BodyEntryRow({ entry, onEdit, onDelete, onRecalcAge }) {
           {entry.muscleMassKg !== null && <span className="text-xs text-slate-400">{fmtNum(entry.muscleMassKg, 1)} kg músculo</span>}
           {entry.proteinPct !== null && <span className="text-xs text-slate-400">{fmtNum(entry.proteinPct, 1)}% proteína</span>}
           {entry.bodyAge !== null && entry.bodyAge !== undefined ? (
-            <span className="text-xs text-slate-400">idade corporal {fmtNum(entry.bodyAge, 0)}</span>
+            <span className="text-xs text-slate-400">idade metabólica {fmtNum(entry.bodyAge, 0)}</span>
           ) : (
             <button onClick={handleRecalc} disabled={recalculating} className="text-xs text-slate-400 hover:text-slate-700 underline disabled:opacity-50 flex items-center gap-1">
               {recalculating && <Loader2 size={11} className="animate-spin" />}
-              {recalculating ? "Calculando idade corporal..." : "Calcular idade corporal"}
+              {recalculating ? "Calculando idade metabólica..." : "Calcular idade metabólica"}
             </button>
           )}
           {entry.systolicBp !== null && entry.diastolicBp !== null && (
