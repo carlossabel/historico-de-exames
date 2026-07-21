@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   color_idx INTEGER NOT NULL DEFAULT 0,
   birth_date TEXT,
   gender TEXT,
+  height_cm REAL,
   created_at INTEGER NOT NULL
 );
 
@@ -183,6 +184,9 @@ if (!profilesCols.includes("birth_date")) {
 }
 if (!profilesCols.includes("gender")) {
   db.exec("ALTER TABLE profiles ADD COLUMN gender TEXT");
+}
+if (!profilesCols.includes("height_cm")) {
+  db.exec("ALTER TABLE profiles ADD COLUMN height_cm REAL");
 }
 
 // Migração leve: bancos criados antes dos sintomas/composição corporal só tinham

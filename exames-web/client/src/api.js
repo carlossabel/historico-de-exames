@@ -182,6 +182,13 @@ export async function deleteBodyEntry(profileId, entryId) {
   await fetch(`/api/profiles/${profileId}/body-entries/${entryId}`, { method: "DELETE" });
 }
 
+export async function recalcBodyAge(profileId, entryId) {
+  const r = await fetch(`/api/profiles/${profileId}/body-entries/${entryId}/recalc-body-age`, { method: "POST" });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao calcular idade corporal");
+  return data;
+}
+
 export async function getSymptoms(profileId) {
   const r = await fetch(`/api/profiles/${profileId}/symptoms`);
   return r.json();

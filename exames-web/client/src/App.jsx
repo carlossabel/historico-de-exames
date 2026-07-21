@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-21c · fix: modal de editar perfil só abria na aba Exames (agora abre em qualquer aba)";
+const APP_BUILD = "2026-07-21d · altura movida para o perfil + botão de recalcular idade corporal";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -103,17 +103,19 @@ const BODY_INDICATORS = [
   { key: "boneMassKg", label: "Massa óssea", unit: "kg", decimals: 2 },
   { key: "bodyWaterPct", label: "Água corporal", unit: "%", decimals: 1 },
   { key: "bmrKcal", label: "Taxa metabólica basal", unit: "kcal", decimals: 0 },
-  { key: "heightCm", label: "Altura", unit: "cm", decimals: 1 },
   { key: "bloodPressure", label: "Pressão arterial", unit: "mmHg", decimals: 0, isBloodPressure: true },
   { key: "restingHeartRate", label: "Frequência cardíaca em repouso", unit: "bpm", decimals: 0 },
   { key: "bodyAge", label: "Idade corporal", unit: "anos", decimals: 0, computed: true },
 ];
 
-function withImc(entries) {
-  let lastHeight = null;
+function withImc(entries, profileHeightCm) {
+  let lastHeight = profileHeightCm || null;
   return entries.map((e) => {
-    if (e.heightCm !== null && e.heightCm !== undefined) lastHeight = e.heightCm;
-    const imc = e.weightKg && lastHeight ? Math.round((e.weightKg / ((lastHeight / 100) ** 2)) * 10) / 10 : null;
+    // Compat com medições antigas que ainda guardavam altura por medição (de antes da altura
+    // passar a viver no perfil). Se o perfil já tem altura definida, ela sempre tem prioridade.
+    if (!profileHeightCm && e.heightCm !== null && e.heightCm !== undefined) lastHeight = e.heightCm;
+    const heightForCalc = profileHeightCm || lastHeight;
+    const imc = e.weightKg && heightForCalc ? Math.round((e.weightKg / ((heightForCalc / 100) ** 2)) * 10) / 10 : null;
     return { ...e, imc };
   });
 }
@@ -128,7 +130,7 @@ const BODY_MERGE_FIELDS = [
   "bodyWaterPct", "proteinPct", "bmrKcal", "restingHeartRate", "bodyAge",
 ];
 
-function mergeLatestBodyFields(withImcEntries) {
+function mergeLatestBodyFields(withImcEntries, profileHeightCm) {
   const merged = {};
   for (const f of BODY_MERGE_FIELDS) merged[f] = null;
   let bloodPressure = null;
@@ -141,8 +143,9 @@ function mergeLatestBodyFields(withImcEntries) {
       bloodPressure = { systolicBp: e.systolicBp, diastolicBp: e.diastolicBp };
     }
   }
-  const imc = merged.weightKg && merged.heightCm ? Math.round((merged.weightKg / ((merged.heightCm / 100) ** 2)) * 10) / 10 : null;
-  return { ...merged, imc, systolicBp: bloodPressure?.systolicBp ?? null, diastolicBp: bloodPressure?.diastolicBp ?? null };
+  const heightForImc = profileHeightCm || merged.heightCm;
+  const imc = merged.weightKg && heightForImc ? Math.round((merged.weightKg / ((heightForImc / 100) ** 2)) * 10) / 10 : null;
+  return { ...merged, heightCm: heightForImc, imc, systolicBp: bloodPressure?.systolicBp ?? null, diastolicBp: bloodPressure?.diastolicBp ?? null };
 }
 
 // Para a setinha de tendência (subiu/desceu): pega os DOIS valores mais recentes desse
@@ -376,10 +379,11 @@ function AddProfileModal({ onClose, onConfirm }) {
   const [name, setName] = useState("");
   const [birthDate, setBirthDate] = useState("");
   const [gender, setGender] = useState("");
+  const [heightCm, setHeightCm] = useState("");
 
   const confirm = () => {
     if (!name.trim()) return;
-    onConfirm(name.trim(), { birthDate: birthDate || null, gender: gender || null });
+    onConfirm(name.trim(), { birthDate: birthDate || null, gender: gender || null, heightCm: heightCm || null });
   };
 
   return (
@@ -393,7 +397,7 @@ function AddProfileModal({ onClose, onConfirm }) {
         className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-300"
         onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) confirm(); }}
       />
-      <div className="grid grid-cols-2 gap-3 mb-1">
+      <div className="grid grid-cols-3 gap-3 mb-1">
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Data de nascimento</label>
           <input
@@ -411,9 +415,20 @@ function AddProfileModal({ onClose, onConfirm }) {
             <option value="M">Masculino</option>
           </select>
         </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Altura (cm)</label>
+          <input
+            type="number"
+            step="0.1"
+            value={heightCm}
+            onChange={(e) => setHeightCm(e.target.value)}
+            placeholder="Ex: 175"
+            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
+          />
+        </div>
       </div>
       <p className="text-xs text-slate-400 mb-4">
-        Opcional — usado só na aba Saúde física, para a IA estimar a "idade corporal". Pode preencher depois também.
+        Tudo opcional — usado na aba Saúde física para calcular o IMC e a IA estimar a "idade corporal". Pode preencher depois também.
       </p>
       <div className="flex justify-end gap-2">
         <button onClick={onClose} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
@@ -429,6 +444,7 @@ function EditProfileModal({ profile, onClose, onSave }) {
   const [name, setName] = useState(profile.name || "");
   const [birthDate, setBirthDate] = useState(profile.birthDate || "");
   const [gender, setGender] = useState(profile.gender || "");
+  const [heightCm, setHeightCm] = useState(profile.heightCm ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -437,7 +453,7 @@ function EditProfileModal({ profile, onClose, onSave }) {
     setSaving(true);
     setError(null);
     try {
-      await onSave({ name: name.trim(), birthDate: birthDate || null, gender: gender || null });
+      await onSave({ name: name.trim(), birthDate: birthDate || null, gender: gender || null, heightCm: heightCm || null });
     } catch (e) {
       setError(e.message || "Erro ao salvar perfil.");
     } finally {
@@ -454,7 +470,7 @@ function EditProfileModal({ profile, onClose, onSave }) {
         onChange={(e) => setName(e.target.value)}
         className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-300"
       />
-      <div className="grid grid-cols-2 gap-3 mb-2">
+      <div className="grid grid-cols-3 gap-3 mb-2">
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Data de nascimento</label>
           <input
@@ -472,9 +488,20 @@ function EditProfileModal({ profile, onClose, onSave }) {
             <option value="M">Masculino</option>
           </select>
         </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Altura (cm)</label>
+          <input
+            type="number"
+            step="0.1"
+            value={heightCm}
+            onChange={(e) => setHeightCm(e.target.value)}
+            placeholder="Ex: 175"
+            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
+          />
+        </div>
       </div>
       <p className="text-xs text-slate-400 mb-4">
-        Data de nascimento e sexo são usados só para a IA estimar a "idade corporal" na aba Saúde física — nenhum dado é obrigatório.
+        Altura é usada para calcular o IMC. Data de nascimento e sexo são usados pela IA para estimar a "idade corporal" — nada aqui é obrigatório.
       </p>
       {error && (
         <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
@@ -777,7 +804,7 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
         />
       )}
 
-      {tab === "corpo" && <BodyCompositionScreen profileId={profile.id} />}
+      {tab === "corpo" && <BodyCompositionScreen profileId={profile.id} profile={profile} />}
 
       {tab === "sintomas" && <SymptomsScreen profileId={profile.id} />}
 
@@ -1522,13 +1549,14 @@ function TipsModal({ profileId, alertsInfo, onAlertsChange, onClose }) {
   );
 }
 
-function BodyCompositionScreen({ profileId }) {
+function BodyCompositionScreen({ profileId, profile }) {
   const [entries, setEntries] = useState(null);
   const [formEntry, setFormEntry] = useState(null); // { ...entry } when editing, {} when adding new, null when closed
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [selectedIndicator, setSelectedIndicator] = useState("weightKg");
   const [photoLoading, setPhotoLoading] = useState(false);
   const [photoError, setPhotoError] = useState(null);
+  const [photoHeightNote, setPhotoHeightNote] = useState(null);
   const photoInputRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -1540,6 +1568,7 @@ function BodyCompositionScreen({ profileId }) {
 
   const handlePhoto = async (file) => {
     setPhotoError(null);
+    setPhotoHeightNote(null);
     setPhotoLoading(true);
     try {
       if (file.size > 8 * 1024 * 1024) {
@@ -1551,11 +1580,16 @@ function BodyCompositionScreen({ profileId }) {
       if (!anyValue) {
         throw new Error("Não consegui ler nenhum valor legível nessa foto. Tente uma foto mais nítida ou adicione manualmente.");
       }
-      const latestHeight = entries && entries.length ? withImc(entries)[entries.length - 1]?.heightCm : null;
+      if (extracted.heightCm !== null && extracted.heightCm !== undefined) {
+        setPhotoHeightNote(
+          profile?.heightCm
+            ? `Detectei ${extracted.heightCm} cm de altura nessa foto — a altura salva no perfil (${profile.heightCm} cm) é a que vale para IMC e idade corporal. Edite o perfil se precisar corrigir.`
+            : `Detectei ${extracted.heightCm} cm de altura nessa foto. Como a altura agora fica no perfil (não em cada medição), defina-a no botão de editar perfil pra ela contar no IMC e na idade corporal.`
+        );
+      }
       setFormEntry({
         date: extracted.date || new Date().toISOString().slice(0, 10),
         weightKg: extracted.weightKg ?? "",
-        heightCm: extracted.heightCm ?? (latestHeight ?? ""),
         bodyFatPct: extracted.bodyFatPct ?? "",
         muscleMassKg: extracted.muscleMassKg ?? "",
         visceralFat: extracted.visceralFat ?? "",
@@ -1592,12 +1626,17 @@ function BodyCompositionScreen({ profileId }) {
     await load();
   };
 
+  const recalcAge = async (entryId) => {
+    await api.recalcBodyAge(profileId, entryId);
+    await load();
+  };
+
   if (entries === null) {
     return <div className="flex justify-center py-16 text-slate-400"><Loader2 className="animate-spin" size={22} /></div>;
   }
 
-  const withImcEntries = withImc(entries);
-  const latest = withImcEntries.length ? mergeLatestBodyFields(withImcEntries) : null;
+  const withImcEntries = withImc(entries, profile?.heightCm);
+  const latest = withImcEntries.length ? mergeLatestBodyFields(withImcEntries, profile?.heightCm) : null;
 
   const summaryKeys = ["weightKg", "imc", "bodyFatPct", "muscleMassKg"];
 
@@ -1606,6 +1645,7 @@ function BodyCompositionScreen({ profileId }) {
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <p className="text-sm text-slate-500">
           {entries.length} mediç{entries.length !== 1 ? "ões" : "ão"} registrada{entries.length !== 1 ? "s" : ""}
+          {profile?.heightCm ? ` · altura: ${fmtNum(profile.heightCm, 1)} cm (definida no perfil)` : " · altura não definida no perfil"}
         </p>
         <div className="flex items-center gap-2">
           <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePhoto(f); e.target.value = ""; }} />
@@ -1618,13 +1658,25 @@ function BodyCompositionScreen({ profileId }) {
             {photoLoading ? "Lendo foto..." : "Enviar foto"}
           </button>
           <button
-            onClick={() => setFormEntry({ date: new Date().toISOString().slice(0, 10), heightCm: latest?.heightCm ?? "" })}
+            onClick={() => setFormEntry({ date: new Date().toISOString().slice(0, 10) })}
             className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800"
           >
             <Plus size={15} /> Nova medição
           </button>
         </div>
       </div>
+
+      {!profile?.heightCm && (
+        <div className="mb-4 flex items-start gap-2 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          <Info size={13} className="mt-0.5 shrink-0" /> Sem altura definida no perfil, o IMC e a idade corporal não são calculados. Defina a altura no botão de editar perfil (lápis do lado do nome).
+        </div>
+      )}
+
+      {photoHeightNote && (
+        <div className="mb-4 flex items-start gap-2 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          <Info size={13} className="mt-0.5 shrink-0" /> {photoHeightNote}
+        </div>
+      )}
 
       {photoError && (
         <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
@@ -1733,29 +1785,7 @@ function BodyCompositionScreen({ profileId }) {
 
           <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
             {withImcEntries.slice().reverse().map((e) => (
-              <div key={e.id} className="flex items-center justify-between px-4 py-2.5 flex-wrap gap-2">
-                <div className="flex items-center gap-3 flex-wrap min-w-0">
-                  <span className="text-sm text-slate-800 shrink-0">{fmtDate(e.date)}</span>
-                  <span className="text-xs text-slate-500">{fmtNum(e.weightKg, 1)} kg</span>
-                  {e.imc !== null && <span className="text-xs text-slate-400">IMC {fmtNum(e.imc, 1)}</span>}
-                  {e.bodyFatPct !== null && <span className="text-xs text-slate-400">{fmtNum(e.bodyFatPct, 1)}% gordura</span>}
-                  {e.muscleMassKg !== null && <span className="text-xs text-slate-400">{fmtNum(e.muscleMassKg, 1)} kg músculo</span>}
-                  {e.proteinPct !== null && <span className="text-xs text-slate-400">{fmtNum(e.proteinPct, 1)}% proteína</span>}
-                  {e.bodyAge !== null && e.bodyAge !== undefined && <span className="text-xs text-slate-400">idade corporal {fmtNum(e.bodyAge, 0)}</span>}
-                  {e.systolicBp !== null && e.diastolicBp !== null && (
-                    <span className="text-xs text-slate-400">{fmtNum(e.systolicBp, 0)}/{fmtNum(e.diastolicBp, 0)} mmHg</span>
-                  )}
-                  {e.restingHeartRate !== null && <span className="text-xs text-slate-400">{fmtNum(e.restingHeartRate, 0)} bpm</span>}
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button onClick={() => setFormEntry(e)} className="text-slate-300 hover:text-slate-700 p-1.5" aria-label="Editar medição">
-                    <Pencil size={14} />
-                  </button>
-                  <button onClick={() => setConfirmDelete(e)} className="text-slate-300 hover:text-red-500 p-1.5" aria-label="Excluir medição">
-                    <Trash2 size={15} />
-                  </button>
-                </div>
-              </div>
+              <BodyEntryRow key={e.id} entry={e} onEdit={setFormEntry} onDelete={setConfirmDelete} onRecalcAge={recalcAge} />
             ))}
           </div>
         </>
@@ -1773,6 +1803,61 @@ function BodyCompositionScreen({ profileId }) {
           onCancel={() => setConfirmDelete(null)}
           onConfirm={() => removeEntry(confirmDelete.id)}
         />
+      )}
+    </div>
+  );
+}
+
+function BodyEntryRow({ entry, onEdit, onDelete, onRecalcAge }) {
+  const [recalculating, setRecalculating] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleRecalc = async () => {
+    setRecalculating(true);
+    setError(null);
+    try {
+      await onRecalcAge(entry.id);
+    } catch (e) {
+      setError(e.message || "Erro ao calcular idade corporal.");
+    } finally {
+      setRecalculating(false);
+    }
+  };
+
+  return (
+    <div className="px-4 py-2.5">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-3 flex-wrap min-w-0">
+          <span className="text-sm text-slate-800 shrink-0">{fmtDate(entry.date)}</span>
+          <span className="text-xs text-slate-500">{fmtNum(entry.weightKg, 1)} kg</span>
+          {entry.imc !== null && <span className="text-xs text-slate-400">IMC {fmtNum(entry.imc, 1)}</span>}
+          {entry.bodyFatPct !== null && <span className="text-xs text-slate-400">{fmtNum(entry.bodyFatPct, 1)}% gordura</span>}
+          {entry.muscleMassKg !== null && <span className="text-xs text-slate-400">{fmtNum(entry.muscleMassKg, 1)} kg músculo</span>}
+          {entry.proteinPct !== null && <span className="text-xs text-slate-400">{fmtNum(entry.proteinPct, 1)}% proteína</span>}
+          {entry.bodyAge !== null && entry.bodyAge !== undefined ? (
+            <span className="text-xs text-slate-400">idade corporal {fmtNum(entry.bodyAge, 0)}</span>
+          ) : (
+            <button onClick={handleRecalc} disabled={recalculating} className="text-xs text-slate-400 hover:text-slate-700 underline disabled:opacity-50 flex items-center gap-1">
+              {recalculating && <Loader2 size={11} className="animate-spin" />}
+              {recalculating ? "Calculando idade corporal..." : "Calcular idade corporal"}
+            </button>
+          )}
+          {entry.systolicBp !== null && entry.diastolicBp !== null && (
+            <span className="text-xs text-slate-400">{fmtNum(entry.systolicBp, 0)}/{fmtNum(entry.diastolicBp, 0)} mmHg</span>
+          )}
+          {entry.restingHeartRate !== null && <span className="text-xs text-slate-400">{fmtNum(entry.restingHeartRate, 0)} bpm</span>}
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <button onClick={() => onEdit(entry)} className="text-slate-300 hover:text-slate-700 p-1.5" aria-label="Editar medição">
+            <Pencil size={14} />
+          </button>
+          <button onClick={() => onDelete(entry)} className="text-slate-300 hover:text-red-500 p-1.5" aria-label="Excluir medição">
+            <Trash2 size={15} />
+          </button>
+        </div>
+      </div>
+      {error && (
+        <p className="text-xs text-red-600 mt-1.5 flex items-start gap-1"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> {error}</p>
       )}
     </div>
   );
@@ -1827,7 +1912,6 @@ function BodyIndicatorChart({ indicator, entries }) {
 
 const BODY_FORM_FIELDS = [
   { key: "weightKg", label: "Peso (kg)", step: "0.1" },
-  { key: "heightCm", label: "Altura (cm)", step: "0.1" },
   { key: "bodyFatPct", label: "Gordura corporal (%)", step: "0.1" },
   { key: "muscleMassKg", label: "Massa muscular (kg)", step: "0.1" },
   { key: "proteinPct", label: "Proteína (%)", step: "0.1" },
@@ -1842,7 +1926,6 @@ function BodyEntryModal({ entry, onCancel, onSave }) {
   const [form, setForm] = useState({
     date: entry.date || new Date().toISOString().slice(0, 10),
     weightKg: entry.weightKg ?? "",
-    heightCm: entry.heightCm ?? "",
     bodyFatPct: entry.bodyFatPct ?? "",
     muscleMassKg: entry.muscleMassKg ?? "",
     proteinPct: entry.proteinPct ?? "",

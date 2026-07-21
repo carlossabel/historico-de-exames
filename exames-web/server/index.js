@@ -23,34 +23,34 @@ function uid() {
 // ---------- Profiles ----------
 app.get("/api/profiles", (req, res) => {
   const rows = db
-    .prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, created_at as createdAt FROM profiles ORDER BY created_at ASC")
+    .prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, created_at as createdAt FROM profiles ORDER BY created_at ASC")
     .all();
   res.json(rows);
 });
 
 app.post("/api/profiles", (req, res) => {
-  const { name, birthDate, gender } = req.body || {};
+  const { name, birthDate, gender, heightCm } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: "Nome obrigatório" });
   const count = db.prepare("SELECT COUNT(*) as c FROM profiles").get().c;
   const id = uid();
   const colorIdx = count % 8;
   const createdAt = Date.now();
-  db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
-    id, name.trim(), colorIdx, birthDate || null, gender || null, createdAt
+  db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+    id, name.trim(), colorIdx, birthDate || null, gender || null, numOrNull(heightCm), createdAt
   );
-  res.json({ id, name: name.trim(), colorIdx, birthDate: birthDate || null, gender: gender || null, createdAt });
+  res.json({ id, name: name.trim(), colorIdx, birthDate: birthDate || null, gender: gender || null, heightCm: numOrNull(heightCm), createdAt });
 });
 
 app.put("/api/profiles/:id", (req, res) => {
   const { id } = req.params;
   const existing = db.prepare("SELECT id FROM profiles WHERE id = ?").get(id);
   if (!existing) return res.status(404).json({ error: "Perfil não encontrado" });
-  const { name, birthDate, gender } = req.body || {};
+  const { name, birthDate, gender, heightCm } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: "Nome obrigatório" });
-  db.prepare("UPDATE profiles SET name = ?, birth_date = ?, gender = ? WHERE id = ?").run(
-    name.trim(), birthDate || null, gender || null, id
+  db.prepare("UPDATE profiles SET name = ?, birth_date = ?, gender = ?, height_cm = ? WHERE id = ?").run(
+    name.trim(), birthDate || null, gender || null, numOrNull(heightCm), id
   );
-  const row = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, created_at as createdAt FROM profiles WHERE id = ?").get(id);
+  const row = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, created_at as createdAt FROM profiles WHERE id = ?").get(id);
   res.json(row);
 });
 
@@ -171,34 +171,54 @@ function ageFromBirthDate(birthDate) {
   return age;
 }
 
-// Calcula (via IA) a "idade corporal" estimada dessa medição e já grava no banco.
-// Só roda se o perfil tiver data de nascimento (idade é a referência mínima necessária).
-// Qualquer falha aqui é silenciosa — a medição já foi salva independente disso.
+// Calcula (via IA) a "idade corporal" estimada pra uma medição, usando a altura do PERFIL
+// (fallback pra altura antiga gravada na própria medição, se existir, pra não perder dados de
+// quem já tinha altura por medição antes dessa mudança). Não grava nada no banco sozinha —
+// quem chama decide o que fazer com o resultado. Lança erro se a chamada de IA falhar de
+// verdade (usado pelo endpoint de recálculo manual, que quer mostrar o motivo pro usuário);
+// retorna { skippedReason } quando falta pré-requisito (idade/dado nenhum), sem precisar de IA.
+async function computeBodyAge(profile, entryRow) {
+  if (!profile || !profile.birth_date) {
+    return { bodyAge: null, skippedReason: "Defina a data de nascimento no perfil (botão de editar perfil) para calcular a idade corporal." };
+  }
+  const chronologicalAge = ageFromBirthDate(profile.birth_date);
+  if (chronologicalAge === null) {
+    return { bodyAge: null, skippedReason: "A data de nascimento salva no perfil é inválida." };
+  }
+
+  const heightCm = profile.height_cm ?? entryRow.height_cm ?? null;
+  const imc = entryRow.weight_kg && heightCm ? Math.round((entryRow.weight_kg / ((heightCm / 100) ** 2)) * 10) / 10 : null;
+
+  const metrics = {
+    weightKg: entryRow.weight_kg, heightCm, bodyFatPct: entryRow.body_fat_pct,
+    muscleMassKg: entryRow.muscle_mass_kg, visceralFat: entryRow.visceral_fat, bodyWaterPct: entryRow.body_water_pct,
+    proteinPct: entryRow.protein_pct, bmrKcal: entryRow.bmr_kcal, restingHeartRate: entryRow.resting_heart_rate, imc,
+  };
+  if (Object.values(metrics).every((v) => v === null || v === undefined)) {
+    return { bodyAge: null, skippedReason: "Essa medição não tem nenhum dado de composição corporal (peso, %gordura, músculo etc.) para basear a estimativa." };
+  }
+
+  const prompt = buildBodyAgePrompt(chronologicalAge, profile.gender, metrics);
+  const text = await callClaude([{ role: "user", content: prompt }], 400);
+  const parsed = repairJson(text);
+  const bodyAge = numOrNull(parsed.idade_corporal);
+  if (bodyAge === null) {
+    return { bodyAge: null, skippedReason: `A IA respondeu, mas sem um número de idade corporal válido: ${text.slice(0, 200)}` };
+  }
+  return { bodyAge, explicacao: parsed.explicacao || null };
+}
+
+// Usado no salvamento automático (POST/PUT de medição): silenciosa de propósito, pra não
+// travar o salvamento da medição por causa de um problema no cálculo de idade corporal.
 async function computeAndStoreBodyAge(profileId, entryId, entryRow) {
   try {
-    const profile = db.prepare("SELECT birth_date, gender FROM profiles WHERE id = ?").get(profileId);
-    if (!profile || !profile.birth_date) return;
-    const chronologicalAge = ageFromBirthDate(profile.birth_date);
-    if (chronologicalAge === null) return;
-
-    const imc =
-      entryRow.weight_kg && entryRow.height_cm ? Math.round((entryRow.weight_kg / ((entryRow.height_cm / 100) ** 2)) * 10) / 10 : null;
-
-    const metrics = {
-      weightKg: entryRow.weight_kg, heightCm: entryRow.height_cm, bodyFatPct: entryRow.body_fat_pct,
-      muscleMassKg: entryRow.muscle_mass_kg, visceralFat: entryRow.visceral_fat, bodyWaterPct: entryRow.body_water_pct,
-      proteinPct: entryRow.protein_pct, bmrKcal: entryRow.bmr_kcal, restingHeartRate: entryRow.resting_heart_rate, imc,
-    };
-    // Sem nenhuma métrica além da idade/sexo não vale a pena gastar uma chamada de IA.
-    if (Object.values(metrics).every((v) => v === null || v === undefined)) return;
-
-    const prompt = buildBodyAgePrompt(chronologicalAge, profile.gender, metrics);
-    const text = await callClaude([{ role: "user", content: prompt }], 400);
-    const parsed = repairJson(text);
-    const bodyAge = numOrNull(parsed.idade_corporal);
-    if (bodyAge !== null) {
-      db.prepare("UPDATE body_entries SET body_age = ? WHERE id = ?").run(bodyAge, entryId);
+    const profile = db.prepare("SELECT birth_date, gender, height_cm FROM profiles WHERE id = ?").get(profileId);
+    const { bodyAge, skippedReason } = await computeBodyAge(profile, entryRow);
+    if (skippedReason) {
+      console.warn(`Idade corporal não calculada para a medição ${entryId}: ${skippedReason}`);
+      return;
     }
+    db.prepare("UPDATE body_entries SET body_age = ? WHERE id = ?").run(bodyAge, entryId);
   } catch (e) {
     console.warn("Não foi possível calcular a idade corporal para a medição", entryId, ":", e.message);
   }
@@ -260,6 +280,25 @@ app.put("/api/profiles/:profileId/body-entries/:entryId", async (req, res) => {
     res.json(rowToBodyEntry(row));
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao atualizar medição" });
+  }
+});
+
+app.post("/api/profiles/:profileId/body-entries/:entryId/recalc-body-age", async (req, res) => {
+  try {
+    const { profileId, entryId } = req.params;
+    const entryRow = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(entryId);
+    if (!entryRow) return res.status(404).json({ error: "Medição não encontrada" });
+    const profile = db.prepare("SELECT birth_date, gender, height_cm FROM profiles WHERE id = ?").get(profileId);
+
+    const { bodyAge, skippedReason, explicacao } = await computeBodyAge(profile, entryRow);
+    if (skippedReason) {
+      return res.status(400).json({ error: skippedReason });
+    }
+    db.prepare("UPDATE body_entries SET body_age = ? WHERE id = ?").run(bodyAge, entryId);
+    const row = db.prepare("SELECT * FROM body_entries WHERE id = ?").get(entryId);
+    res.json({ ...rowToBodyEntry(row), explicacao });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao calcular idade corporal" });
   }
 });
 
@@ -921,7 +960,7 @@ app.delete("/api/profiles/:profileId/symptoms/:symptomId", (req, res) => {
 // ---------- Export backup ----------
 app.get("/api/export", (req, res) => {
   try {
-    const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, created_at as createdAt FROM profiles").all();
+    const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, created_at as createdAt FROM profiles").all();
     const backup = { version: 6, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {} };
     for (const p of profiles) {
       const activityRows = db
@@ -981,12 +1020,13 @@ app.post("/api/import", (req, res) => {
         profileId = uid(); // avoid id collision with existing data
       }
       const count = db.prepare("SELECT COUNT(*) as c FROM profiles").get().c;
-      db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, created_at) VALUES (?,?,?,?,?,?)").run(
+      db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, created_at) VALUES (?,?,?,?,?,?,?)").run(
         profileId,
         p.name || "Sem nome",
         typeof p.colorIdx === "number" ? p.colorIdx : count % 8,
         p.birthDate || null,
         p.gender || null,
+        numOrNull(p.heightCm),
         p.createdAt || Date.now()
       );
       importedProfiles++;
