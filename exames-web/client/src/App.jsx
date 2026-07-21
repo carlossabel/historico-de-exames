@@ -61,6 +61,24 @@ function counts(results) {
     F: results.filter((r) => r.status === "F").length,
   };
 }
+// Junta os exames de TODOS os laudos guardados, mostrando o valor mais recente de cada exame
+// (por nome). orderedBatchIds já vem ordenado do mais recente para o mais antigo (por data),
+// então basta manter a primeira ocorrência de cada nome de exame encontrada.
+function mergeLatestExamResults(orderedBatchIds, batches) {
+  const seen = new Set();
+  const merged = [];
+  for (const batchId of orderedBatchIds) {
+    const batch = batches[batchId];
+    if (!batch || !Array.isArray(batch.results)) continue;
+    for (const r of batch.results) {
+      const key = (r.name || "").trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push({ ...r, batchDate: batch.date });
+    }
+  }
+  return merged;
+}
 function fmtDate(d) {
   if (!d) return "";
   try {
@@ -517,7 +535,11 @@ function ProfileScreen({ profile, onBack, initialTab }) {
   }
 
   const orderedBatchIds = index.map((b) => b.batchId);
-  const latestBatch = orderedBatchIds.length ? batches[orderedBatchIds[0]] : null;
+  // Lista "achatada": para cada exame (ex. Colesterol, Testosterona), o valor mais recente
+  // encontrado em qualquer laudo já guardado — não só do último laudo enviado.
+  // (Não usamos useMemo aqui de propósito: este trecho já vem depois de um "return" condicional
+  // mais acima no componente, e chamar hooks depois de um retorno condicional quebra as Rules of Hooks.)
+  const mergedResults = mergeLatestExamResults(orderedBatchIds, batches);
 
   const c = PROFILE_COLORS[profile.colorIdx % PROFILE_COLORS.length];
   const hasSuggestions = !!(alertsInfo && alertsInfo.data && alertsInfo.data.temSugestoes);
@@ -610,8 +632,8 @@ function ProfileScreen({ profile, onBack, initialTab }) {
         </div>
       )}
 
-      {latestBatch ? (
-        <ExamTable results={latestBatch.results} onSelectExam={(name) => setSelectedExam(name)} />
+      {mergedResults.length ? (
+        <ExamTable results={mergedResults} onSelectExam={(name) => setSelectedExam(name)} />
       ) : (
         <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
           <FileText size={28} className="mx-auto mb-2" />
@@ -680,7 +702,7 @@ function ExamTable({ results, onSelectExam }) {
   return (
     <div className="border border-slate-200 rounded-xl overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-slate-50">
-        <p className="text-sm font-medium text-slate-700">Resultados mais recentes</p>
+        <p className="text-sm font-medium text-slate-700">Todos os exames (valor mais recente de cada um)</p>
         <div className="flex gap-1.5">
           {["all", "F", "A", "N"].map((s) => (
             <button key={s} onClick={() => setFilter(s)} className={`text-xs px-2 py-1 rounded-full border ${filter === s ? "border-slate-400 bg-white" : "border-transparent text-slate-400"}`}>
