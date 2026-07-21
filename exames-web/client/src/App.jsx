@@ -113,6 +113,44 @@ function withImc(entries) {
   });
 }
 
+// Painel da aba Saúde física: junta TODAS as medições (foto ou manual) e, para cada item
+// (peso, %gordura, proteína, idade corporal etc.), usa o valor da aferição mais recente
+// DESSE item específico — não só os campos que vieram na última medição cadastrada.
+// Ex: se peso foi medido dia 10 e % de gordura só foi medido dia 5, o painel mostra os dois,
+// cada um com sua própria data mais recente, em vez de esconder a gordura por não estar no dia 10.
+const BODY_MERGE_FIELDS = [
+  "weightKg", "heightCm", "bodyFatPct", "muscleMassKg", "visceralFat", "boneMassKg",
+  "bodyWaterPct", "proteinPct", "bmrKcal", "restingHeartRate", "bodyAge",
+];
+
+function mergeLatestBodyFields(withImcEntries) {
+  const merged = {};
+  for (const f of BODY_MERGE_FIELDS) merged[f] = null;
+  let bloodPressure = null;
+  for (let i = withImcEntries.length - 1; i >= 0; i--) {
+    const e = withImcEntries[i];
+    for (const f of BODY_MERGE_FIELDS) {
+      if (merged[f] === null && e[f] !== null && e[f] !== undefined) merged[f] = e[f];
+    }
+    if (!bloodPressure && e.systolicBp !== null && e.systolicBp !== undefined && e.diastolicBp !== null && e.diastolicBp !== undefined) {
+      bloodPressure = { systolicBp: e.systolicBp, diastolicBp: e.diastolicBp };
+    }
+  }
+  const imc = merged.weightKg && merged.heightCm ? Math.round((merged.weightKg / ((merged.heightCm / 100) ** 2)) * 10) / 10 : null;
+  return { ...merged, imc, systolicBp: bloodPressure?.systolicBp ?? null, diastolicBp: bloodPressure?.diastolicBp ?? null };
+}
+
+// Para a setinha de tendência (subiu/desceu): pega os DOIS valores mais recentes desse
+// campo específico, mesmo que não venham das duas medições mais recentes no geral.
+function latestTwoValues(withImcEntries, key) {
+  const vals = [];
+  for (let i = withImcEntries.length - 1; i >= 0 && vals.length < 2; i--) {
+    const v = withImcEntries[i][key];
+    if (v !== null && v !== undefined) vals.push(v);
+  }
+  return vals;
+}
+
 function fmtNum(v, decimals = 1) {
   if (v === null || v === undefined) return "—";
   return Number(v).toLocaleString("pt-BR", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
@@ -1522,8 +1560,7 @@ function BodyCompositionScreen({ profileId }) {
   }
 
   const withImcEntries = withImc(entries);
-  const latest = withImcEntries.length ? withImcEntries[withImcEntries.length - 1] : null;
-  const prev = withImcEntries.length > 1 ? withImcEntries[withImcEntries.length - 2] : null;
+  const latest = withImcEntries.length ? mergeLatestBodyFields(withImcEntries) : null;
 
   const summaryKeys = ["weightKg", "imc", "bodyFatPct", "muscleMassKg"];
 
@@ -1569,7 +1606,7 @@ function BodyCompositionScreen({ profileId }) {
             {summaryKeys.map((key) => {
               const meta = BODY_INDICATORS.find((i) => i.key === key);
               const value = latest ? latest[key] : null;
-              const prevValue = prev ? prev[key] : null;
+              const [, prevValue] = latestTwoValues(withImcEntries, key);
               const diff = value !== null && value !== undefined && prevValue !== null && prevValue !== undefined
                 ? Math.round((value - prevValue) * 10) / 10
                 : null;
