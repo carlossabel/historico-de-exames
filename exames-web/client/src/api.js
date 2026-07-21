@@ -106,6 +106,26 @@ export async function getTipsHistory(profileId) {
   return r.json();
 }
 
+export async function getExamInfo(profileId, examName, signature) {
+  const params = new URLSearchParams({ exam: examName });
+  if (signature) params.set("signature", signature);
+  const r = await fetch(`/api/profiles/${profileId}/exam-info?${params.toString()}`);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao buscar explicação do exame");
+  return data;
+}
+
+export async function generateExamInfo(profileId, payload) {
+  const r = await fetch(`/api/profiles/${profileId}/exam-info/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao gerar explicação do exame");
+  return data;
+}
+
 export async function getAlerts(profileId) {
   const r = await fetch(`/api/profiles/${profileId}/alerts`);
   const data = await r.json();

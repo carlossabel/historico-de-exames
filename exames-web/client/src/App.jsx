@@ -643,7 +643,7 @@ function ProfileScreen({ profile, onBack, initialTab }) {
 
       {index.length > 0 && <BatchHistory index={index} profileId={profile.id} onDelete={removeBatch} onEdit={editBatch} />}
 
-      {selectedExam && <ExamEvolutionModal examName={selectedExam} orderedBatchIds={orderedBatchIds} batches={batches} onClose={() => setSelectedExam(null)} />}
+      {selectedExam && <ExamEvolutionModal examName={selectedExam} orderedBatchIds={orderedBatchIds} batches={batches} profileId={profile.id} onClose={() => setSelectedExam(null)} />}
 
       {reviewData && <ReviewModal data={reviewData} onCancel={() => setReviewData(null)} onConfirm={saveBatch} />}
 
@@ -851,7 +851,7 @@ function BatchEditModal({ batch, onCancel, onSave }) {
   );
 }
 
-function ExamEvolutionModal({ examName, orderedBatchIds, batches, onClose }) {
+function ExamEvolutionModal({ examName, orderedBatchIds, batches, profileId, onClose }) {
   const points = orderedBatchIds
     .map((id) => batches[id])
     .filter(Boolean)
@@ -859,13 +859,63 @@ function ExamEvolutionModal({ examName, orderedBatchIds, batches, onClose }) {
       const r = b.results.find((x) => x.name === examName);
       if (!r) return null;
       const num = parseFloat(String(r.value).replace(",", "."));
-      return { date: b.date, value: isNaN(num) ? null : num, raw: r.value, unit: r.unit, status: r.status, ref: r.ref };
+      return { date: b.date, value: isNaN(num) ? null : num, raw: r.value, unit: r.unit, status: r.status, ref: r.ref, category: r.category };
     })
     .filter(Boolean)
     .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
 
   const numericPoints = points.filter((p) => p.value !== null);
   const colorMap = { N: "#10b981", A: "#f59e0b", F: "#ef4444" };
+
+  const latestPoint = points.length ? points[points.length - 1] : null;
+  const latestForApi = latestPoint
+    ? { value: latestPoint.raw, unit: latestPoint.unit, ref: latestPoint.ref, status: latestPoint.status, category: latestPoint.category }
+    : null;
+  const latestSignature = latestForApi
+    ? `${latestForApi.value}|${latestForApi.unit || ""}|${latestForApi.ref || ""}|${latestForApi.status || ""}`
+    : null;
+  const historyForApi = points.slice(0, -1);
+
+  const [examInfo, setExamInfo] = useState(null);
+  const [loadingExamInfo, setLoadingExamInfo] = useState(true);
+  const [generatingExamInfo, setGeneratingExamInfo] = useState(false);
+  const [examInfoError, setExamInfoError] = useState(null);
+  const [examInfoStale, setExamInfoStale] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoadingExamInfo(true);
+      setExamInfoError(null);
+      try {
+        const res = await api.getExamInfo(profileId, examName, latestSignature);
+        if (cancelled) return;
+        setExamInfo(res.hasData ? res.data : null);
+        setExamInfoStale(!!res.stale);
+      } catch (e) {
+        if (!cancelled) setExamInfoError(e.message || "Não consegui verificar a explicação salva.");
+      } finally {
+        if (!cancelled) setLoadingExamInfo(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId, examName]);
+
+  const runGenerateExamInfo = async () => {
+    if (!latestForApi) return;
+    setGeneratingExamInfo(true);
+    setExamInfoError(null);
+    try {
+      const res = await api.generateExamInfo(profileId, { examName, latest: latestForApi, history: historyForApi });
+      setExamInfo(res.data);
+      setExamInfoStale(false);
+    } catch (e) {
+      setExamInfoError(e.message || "Não consegui gerar a explicação agora.");
+    } finally {
+      setGeneratingExamInfo(false);
+    }
+  };
 
   return (
     <ModalShell onClose={onClose} title={examName} wide>
@@ -890,7 +940,7 @@ function ExamEvolutionModal({ examName, orderedBatchIds, batches, onClose }) {
       ) : (
         <p className="text-sm text-slate-400 mb-4">Ainda não há histórico numérico suficiente para um gráfico (precisa de pelo menos 2 medições).</p>
       )}
-      <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+      <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg mb-4">
         {points.slice().reverse().map((p, i) => {
           const meta = STATUS_META[p.status] || STATUS_META.N;
           return (
@@ -902,6 +952,80 @@ function ExamEvolutionModal({ examName, orderedBatchIds, batches, onClose }) {
             </div>
           );
         })}
+      </div>
+
+      <div className="border border-slate-200 rounded-xl p-4 bg-slate-50">
+        <div className="flex items-center justify-between mb-2 gap-2">
+          <p className="text-sm font-medium text-slate-700 flex items-center gap-1.5">
+            <Sparkles size={14} className="text-slate-500" /> O que esse exame significa
+          </p>
+          {examInfo && !loadingExamInfo && (
+            <button
+              onClick={runGenerateExamInfo}
+              disabled={generatingExamInfo}
+              className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 disabled:opacity-50 whitespace-nowrap"
+            >
+              <RefreshCw size={12} className={generatingExamInfo ? "animate-spin" : ""} /> Perguntar de novo
+            </button>
+          )}
+        </div>
+
+        {loadingExamInfo && (
+          <div className="flex items-center gap-2 text-slate-400 text-sm py-4 justify-center">
+            <Loader2 size={15} className="animate-spin" /> Verificando...
+          </div>
+        )}
+
+        {!loadingExamInfo && examInfoError && (
+          <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 mb-2">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" /> {examInfoError}
+          </div>
+        )}
+
+        {!loadingExamInfo && !examInfo && !generatingExamInfo && (
+          <div>
+            <p className="text-xs text-slate-500 mb-3">
+              A IA pode explicar o que esse exame mede, o que o valor atual representa e, se estiver fora do ideal, o que fazer para melhorar.
+            </p>
+            <button
+              onClick={runGenerateExamInfo}
+              className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800 flex items-center gap-1.5"
+            >
+              <Sparkles size={14} /> Perguntar à IA
+            </button>
+          </div>
+        )}
+
+        {generatingExamInfo && (
+          <div className="flex items-center gap-2 text-slate-400 text-sm py-4 justify-center">
+            <Loader2 size={15} className="animate-spin" /> Analisando o exame...
+          </div>
+        )}
+
+        {!generatingExamInfo && examInfo && (
+          <div>
+            {examInfoStale && (
+              <p className="text-xs text-amber-600 mb-2">O valor desse exame mudou desde a última explicação — clique em "Perguntar de novo" para atualizar.</p>
+            )}
+            <p className="text-sm text-slate-700 mb-2">{examInfo.significado}</p>
+            <p className="text-sm text-slate-700 mb-2">{examInfo.situacao_atual}</p>
+            {Array.isArray(examInfo.acoes) && examInfo.acoes.length > 0 && (
+              <div className="mt-3">
+                <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1.5">O que fazer</p>
+                <ul className="space-y-1.5">
+                  {examInfo.acoes.map((a, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
+                      <CheckCircle2 size={14} className="text-emerald-500 mt-0.5 shrink-0" /> {a}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="flex items-start gap-2 text-xs text-slate-400 bg-white rounded-lg px-3 py-2 mt-3 border border-slate-200">
+              <Info size={12} className="mt-0.5 shrink-0" /> Explicação gerada por IA a partir dos seus resultados — não substitui uma avaliação médica.
+            </div>
+          </div>
+        )}
       </div>
     </ModalShell>
   );

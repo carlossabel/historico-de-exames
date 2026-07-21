@@ -144,3 +144,28 @@ Regras:
 - "restingHeartRate" é a frequência cardíaca em bpm (batimentos por minuto).
 - Números sempre em kg, cm, %, kcal, mmHg ou bpm conforme o campo (converta se a imagem mostrar outra unidade, ex: libras para kg).
 - Se a imagem não for de nenhum desses aparelhos/apps, ou nenhum valor estiver legível, retorne todos os campos como null.`;
+
+export function buildExamInfoPrompt(examName, latest, historyText) {
+  const statusLabel =
+    latest.status === "F" ? "fora da faixa de referência" : latest.status === "A" ? "em atenção/borderline" : "dentro da faixa ideal";
+  return `Você é um assistente que explica exames laboratoriais de forma simples para leigos (não substitui um médico e NÃO faz diagnóstico).
+
+Exame: ${examName}
+Valor atual: ${latest.value} ${latest.unit || ""}
+Faixa de referência: ${latest.ref || "não informada"}
+Status atual: ${statusLabel}
+Categoria: ${latest.category || "não informada"}
+
+Histórico de medições anteriores deste exame (da mais antiga para a mais recente):
+${historyText || "Sem histórico anterior — este é o único resultado registrado até agora."}
+
+Responda APENAS com JSON válido, sem markdown, sem comentários, sem texto antes ou depois, no formato exato:
+{"significado":"1-3 frases explicando o que esse exame mede e para que serve, em linguagem simples e acessível","situacao_atual":"1-2 frases explicando o que o valor atual representa, se está dentro do esperado e, se houver histórico, se está melhorando, piorando ou estável","acoes":["ação prática 1","ação prática 2","..."]}
+
+Regras:
+- "acoes": se o status atual estiver "dentro da faixa ideal", retorne um array vazio [] — não invente ações desnecessárias para algo que já está bem.
+- Se o status for "atenção" ou "fora da faixa", gere de 2 a 5 ações práticas e específicas de estilo de vida (alimentação, sono, exercício, hidratação, acompanhamento médico) que ajudem a normalizar ESSE exame em especial — não dicas genéricas de saúde.
+- NUNCA cite nomes de medicamentos, doses, suplementos específicos ou diagnostique uma doença/condição.
+- Seja direto e conciso, sem markdown.
+- Responda em português.`;
+}

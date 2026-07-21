@@ -102,6 +102,15 @@ CREATE TABLE IF NOT EXISTS activities (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS exam_explanations (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL,
+  exam_name TEXT NOT NULL,
+  signature TEXT,
+  explicacao TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS strava_tokens (
   profile_id TEXT PRIMARY KEY,
   athlete_id TEXT,
@@ -123,6 +132,7 @@ CREATE INDEX IF NOT EXISTS idx_body_entries_profile ON body_entries(profile_id);
 CREATE INDEX IF NOT EXISTS idx_symptoms_profile ON symptoms(profile_id);
 CREATE INDEX IF NOT EXISTS idx_tips_history_profile ON tips_history(profile_id);
 CREATE INDEX IF NOT EXISTS idx_activities_profile ON activities(profile_id);
+CREATE INDEX IF NOT EXISTS idx_exam_explanations_profile_exam ON exam_explanations(profile_id, exam_name);
 `);
 
 // Migração leve: bancos criados antes do Strava/Apple Watch só tinham as colunas

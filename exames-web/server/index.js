@@ -6,7 +6,7 @@ import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import db, { pdfDir } from "./db.js";
-import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, BODY_PHOTO_EXTRACTION_PROMPT } from "./anthropic.js";
+import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, BODY_PHOTO_EXTRACTION_PROMPT } from "./anthropic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -604,6 +604,61 @@ app.get("/api/profiles/:profileId/tips/history", (req, res) => {
     .prepare("SELECT id, resumo, dicas, created_at FROM tips_history WHERE profile_id = ? ORDER BY created_at DESC")
     .all(req.params.profileId);
   res.json(rows.map((r) => ({ id: r.id, resumo: r.resumo, dicas: JSON.parse(r.dicas), createdAt: r.created_at })));
+});
+
+// ---------- Explicação de um exame específico via IA (o que significa, o que fazer) ----------
+function examInfoSignature(latest) {
+  return `${latest.value}|${latest.unit || ""}|${latest.ref || ""}|${latest.status || ""}`;
+}
+
+// Leitura rápida (sem custo de IA) — devolve a última explicação já gerada para esse exame,
+// e avisa se ela ficou desatualizada (o valor mais recente do exame mudou desde então).
+app.get("/api/profiles/:profileId/exam-info", (req, res) => {
+  const { profileId } = req.params;
+  const examName = (req.query.exam || "").toString().trim();
+  if (!examName) return res.status(400).json({ error: "Parâmetro 'exam' obrigatório" });
+
+  const row = db
+    .prepare("SELECT * FROM exam_explanations WHERE profile_id = ? AND exam_name = ? ORDER BY created_at DESC LIMIT 1")
+    .get(profileId, examName);
+  if (!row) return res.json({ data: null, stale: false, hasData: false });
+
+  const currentSignature = req.query.signature ? String(req.query.signature) : null;
+  const stale = currentSignature !== null && currentSignature !== row.signature;
+  res.json({ data: JSON.parse(row.explicacao), stale, hasData: true, createdAt: row.created_at });
+});
+
+app.post("/api/profiles/:profileId/exam-info/generate", async (req, res) => {
+  try {
+    const { profileId } = req.params;
+    const { examName, latest, history } = req.body || {};
+    if (!examName || !latest || latest.value === undefined) {
+      return res.status(400).json({ error: "Dados do exame incompletos para gerar a explicação." });
+    }
+
+    const signature = examInfoSignature(latest);
+    const historyText = Array.isArray(history)
+      ? history
+          .map((h) => {
+            const statusLabel = h.status === "F" ? "fora do ideal" : h.status === "A" ? "atenção" : "ideal";
+            return `- ${h.date || "data não informada"}: ${h.raw ?? h.value} ${h.unit || ""} [${statusLabel}]`;
+          })
+          .join("\n")
+      : "";
+
+    const prompt = buildExamInfoPrompt(examName, latest, historyText);
+    const text = await callClaude([{ role: "user", content: prompt }], 1000);
+    const parsed = repairJson(text);
+
+    const id = uid();
+    db.prepare(
+      "INSERT INTO exam_explanations (id, profile_id, exam_name, signature, explicacao, created_at) VALUES (?,?,?,?,?,?)"
+    ).run(id, profileId, examName, signature, JSON.stringify(parsed), Date.now());
+
+    res.json({ data: parsed, stale: false, hasData: true, createdAt: Date.now() });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao gerar explicação do exame" });
+  }
 });
 
 // ---------- Alerts (sugestões de novos exames via IA, combinando exames + composição corporal + sintomas) ----------
