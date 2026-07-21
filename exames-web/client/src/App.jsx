@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-21i · chips ideal/atenção também em gordura visceral, água corporal e TMB (comparada por fórmula)";
+const APP_BUILD = "2026-07-21j · botão de IA nos cards de Saúde física fora do ideal (explica valor adequado e o que fazer)";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -1673,6 +1673,7 @@ function BodyCompositionScreen({ profileId, profile }) {
   const [photoLoading, setPhotoLoading] = useState(false);
   const [photoError, setPhotoError] = useState(null);
   const [photoHeightNote, setPhotoHeightNote] = useState(null);
+  const [metricInfoRequest, setMetricInfoRequest] = useState(null);
   const photoInputRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -1813,19 +1814,35 @@ function BodyCompositionScreen({ profileId, profile }) {
                 ? Math.round((value - prevValue) * 10) / 10
                 : null;
               const status = bodyMetricStatus(key, latest, profile);
+              const displayValue = isBP
+                ? (latest?.systolicBp != null && latest?.diastolicBp != null ? `${fmtNum(latest.systolicBp, 0)}/${fmtNum(latest.diastolicBp, 0)}` : null)
+                : value;
+              const showAiButton = (status === "atencao" || status === "fora") && displayValue !== null && displayValue !== undefined;
               return (
-                <button
+                <div
                   key={key}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setSelectedIndicator(key)}
-                  className={`text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition ${selectedIndicator === key ? "ring-2 ring-slate-300" : ""}`}
+                  onKeyDown={(e) => { if (e.key === "Enter") setSelectedIndicator(key); }}
+                  className={`relative text-left bg-slate-50 rounded-xl p-4 hover:bg-slate-100 transition cursor-pointer ${selectedIndicator === key ? "ring-2 ring-slate-300" : ""}`}
                 >
+                  {showAiButton && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMetricInfoRequest({ key, label: meta.label, value: displayValue, unit: meta.unit, status });
+                      }}
+                      className="absolute top-2 right-2 text-slate-400 hover:text-slate-700 bg-white rounded-full p-1 shadow-sm border border-slate-200"
+                      aria-label={`Perguntar à IA sobre ${meta.label}`}
+                      title="Perguntar à IA o que seria adequado"
+                    >
+                      <Sparkles size={12} />
+                    </button>
+                  )}
                   <p className="text-xs text-slate-500 mb-1">{meta.label}</p>
                   <div className="flex items-end gap-1.5">
-                    <span className="text-xl font-medium text-slate-900">
-                      {isBP
-                        ? (latest?.systolicBp != null && latest?.diastolicBp != null ? `${fmtNum(latest.systolicBp, 0)}/${fmtNum(latest.diastolicBp, 0)}` : "—")
-                        : fmtNum(value, meta.decimals)}
-                    </span>
+                    <span className="text-xl font-medium text-slate-900">{isBP ? (displayValue ?? "—") : fmtNum(value, meta.decimals)}</span>
                     <span className="text-xs text-slate-400 mb-0.5">{meta.unit}</span>
                   </div>
                   {diff !== null && diff !== 0 && (
@@ -1834,7 +1851,7 @@ function BodyCompositionScreen({ profileId, profile }) {
                     </span>
                   )}
                   {status && <div className="mt-1.5"><StatusChip status={status} /></div>}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -1880,6 +1897,21 @@ function BodyCompositionScreen({ profileId, profile }) {
           onConfirm={() => removeEntry(confirmDelete.id)}
         />
       )}
+
+      {metricInfoRequest && (
+        <BodyMetricInfoModal
+          profileId={profileId}
+          metric={metricInfoRequest}
+          context={{
+            age: ageFromBirthDateClient(profile?.birthDate),
+            gender: profile?.gender || null,
+            heightCm: profile?.heightCm ?? null,
+            weightKg: latest?.weightKg ?? null,
+            imc: latest?.imc ?? null,
+          }}
+          onClose={() => setMetricInfoRequest(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1910,6 +1942,82 @@ function BodyEntryRow({ entry, onEdit, onDelete }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function BodyMetricInfoModal({ profileId, metric, context, onClose }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [info, setInfo] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const statusLabel = STATUS_META[{ ideal: "N", atencao: "A", fora: "F" }[metric.status]]?.label || "";
+        const data = await api.getBodyMetricInfo(profileId, {
+          metricLabel: metric.label,
+          value: metric.value,
+          unit: metric.unit,
+          statusLabel,
+          context,
+        });
+        if (!cancelled) setInfo(data);
+      } catch (e) {
+        if (!cancelled) setError(e.message || "Não consegui gerar a análise agora.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId, metric.key]);
+
+  return (
+    <ModalShell onClose={onClose} title={metric.label}>
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-lg font-medium text-slate-900">{metric.value} {metric.unit}</span>
+        <StatusChip status={metric.status} />
+      </div>
+
+      {loading && (
+        <div className="flex items-center gap-2 text-slate-400 text-sm py-8 justify-center">
+          <Loader2 size={16} className="animate-spin" /> Analisando...
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+
+      {!loading && info && (
+        <div>
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Valor adequado</p>
+          <p className="text-sm text-slate-700 mb-3">{info.valor_ideal}</p>
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Situação atual</p>
+          <p className="text-sm text-slate-700 mb-3">{info.situacao_atual}</p>
+          {Array.isArray(info.acoes) && info.acoes.length > 0 && (
+            <div className="mt-2">
+              <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1.5">O que fazer</p>
+              <ul className="space-y-1.5">
+                {info.acoes.map((a, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
+                    <CheckCircle2 size={14} className="text-emerald-500 mt-0.5 shrink-0" /> {a}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="flex items-start gap-2 text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 mt-3 border border-slate-200">
+            <Info size={12} className="mt-0.5 shrink-0" /> Análise gerada por IA a partir de faixas de referência gerais — não substitui uma avaliação médica.
+          </div>
+        </div>
+      )}
+    </ModalShell>
   );
 }
 

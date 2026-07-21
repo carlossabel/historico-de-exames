@@ -189,6 +189,17 @@ export async function recalcBodyAge(profileId, entryId) {
   return data;
 }
 
+export async function getBodyMetricInfo(profileId, payload) {
+  const r = await fetch(`/api/profiles/${profileId}/body-metric-info`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao gerar análise");
+  return data;
+}
+
 export async function getSymptoms(profileId) {
   const r = await fetch(`/api/profiles/${profileId}/symptoms`);
   return r.json();

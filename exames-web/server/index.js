@@ -6,7 +6,7 @@ import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import db, { pdfDir } from "./db.js";
-import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, buildBodyAgePrompt, BODY_PHOTO_EXTRACTION_PROMPT } from "./anthropic.js";
+import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, buildBodyAgePrompt, buildBodyMetricInfoPrompt, BODY_PHOTO_EXTRACTION_PROMPT } from "./anthropic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -300,6 +300,24 @@ app.post("/api/profiles/:profileId/body-entries/:entryId/recalc-body-age", async
     res.json({ ...rowToBodyEntry(row), explicacao });
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao calcular idade metabólica" });
+  }
+});
+
+// Explicação sob demanda (botão de IA nos cards fora do ideal da aba Saúde física): não
+// grava nada no banco, é gerada na hora a cada clique — o card já mostra o dado, isso só
+// explica o que seria um valor adequado e o que fazer.
+app.post("/api/profiles/:profileId/body-metric-info", async (req, res) => {
+  try {
+    const { metricLabel, value, unit, statusLabel, context } = req.body || {};
+    if (!metricLabel || value === undefined || value === null) {
+      return res.status(400).json({ error: "Dados da métrica incompletos" });
+    }
+    const prompt = buildBodyMetricInfoPrompt(metricLabel, value, unit, statusLabel || "", context || {});
+    const text = await callClaude([{ role: "user", content: prompt }], 500);
+    const parsed = repairJson(text);
+    res.json(parsed);
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao gerar análise" });
   }
 });
 

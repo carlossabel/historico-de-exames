@@ -214,3 +214,32 @@ Regras:
 - Seja direto e conciso, sem markdown.
 - Responda em português.`;
 }
+
+// Explica uma métrica de composição corporal (peso/IMC/gordura/etc) que já foi classificada
+// como "atenção" ou "fora do ideal" no front-end (ver bodyMetricStatus em App.jsx) — o usuário
+// só chama isso clicando no botão de IA de um card que já está fora da faixa ideal.
+export function buildBodyMetricInfoPrompt(metricLabel, value, unit, statusLabel, context) {
+  const lines = [];
+  if (context.age != null) lines.push(`Idade: ${context.age} anos`);
+  if (context.gender) lines.push(`Sexo: ${context.gender === "F" ? "feminino" : "masculino"}`);
+  if (context.heightCm != null) lines.push(`Altura: ${context.heightCm} cm`);
+  if (context.weightKg != null) lines.push(`Peso: ${context.weightKg} kg`);
+  if (context.imc != null) lines.push(`IMC: ${context.imc}`);
+
+  return `Você é um assistente de bem-estar (não substitui um médico e NÃO faz diagnóstico) explicando pra uma pessoa leiga uma métrica de composição corporal que está fora da faixa considerada ideal.
+
+Métrica: ${metricLabel}
+Valor atual: ${value} ${unit || ""}
+Status atual: ${statusLabel}
+
+Contexto da pessoa:
+${lines.join("\n") || "Sem dados adicionais de contexto."}
+
+Responda APENAS com JSON válido, sem markdown, sem comentários, sem texto antes ou depois, no formato exato:
+{"valor_ideal":"1 frase curta dizendo qual seria a faixa ou valor considerado adequado para essa métrica, nessa pessoa","situacao_atual":"1-2 frases explicando a diferença entre o valor atual e o ideal, em termos simples","acoes":["ação prática 1","ação prática 2","..."]}
+
+Regras:
+- Gere de 2 a 5 ações práticas e específicas de estilo de vida (alimentação, sono, exercício, hidratação, acompanhamento médico) que ajudem a aproximar esse valor do adequado.
+- NUNCA cite nomes de medicamentos, doses, suplementos específicos, nem diagnostique uma doença/condição.
+- Seja direto e conciso, sem markdown. Responda em português.`;
+}
