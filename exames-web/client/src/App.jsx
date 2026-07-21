@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-21g · idade metabólica removida + todos os cards de Saúde física unificados no mesmo estilo";
+const APP_BUILD = "2026-07-21h · todos os campos (gordura visceral, massa óssea, água corporal, TMB etc.) agora aparecem como card";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -1697,7 +1697,8 @@ function BodyCompositionScreen({ profileId, profile }) {
   const withImcEntries = withImc(entries, profile?.heightCm);
   const latest = withImcEntries.length ? mergeLatestBodyFields(withImcEntries, profile?.heightCm) : null;
 
-  const summaryKeys = ["weightKg", "imc", "bodyFatPct", "muscleMassKg", "proteinPct", "bloodPressure", "restingHeartRate"];
+  // Todo campo de BODY_INDICATORS vira um card — nenhum fica de fora.
+  const summaryKeys = BODY_INDICATORS.map((i) => i.key);
 
   return (
     <div>
