@@ -5,8 +5,8 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
-import db, { pdfDir, bodyPhotoDir } from "./db.js";
-import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, buildBodyAgePrompt, buildBodyMetricInfoPrompt, BODY_PHOTO_EXTRACTION_PROMPT } from "./anthropic.js";
+import db, { pdfDir, bodyPhotoDir, invoiceDir } from "./db.js";
+import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, INVOICE_EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, buildBodyAgePrompt, buildBodyMetricInfoPrompt, BODY_PHOTO_EXTRACTION_PROMPT } from "./anthropic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -75,6 +75,12 @@ app.delete("/api/profiles/:id", (req, res) => {
   db.prepare("DELETE FROM activities WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM strava_tokens WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM activity_webhooks WHERE profile_id = ?").run(id);
+  const invoiceRows = db.prepare("SELECT id FROM invoices WHERE profile_id = ?").all(id);
+  for (const inv of invoiceRows) {
+    const invoicePath = path.join(invoiceDir, `${inv.id}.pdf`);
+    if (fs.existsSync(invoicePath)) fs.unlinkSync(invoicePath);
+  }
+  db.prepare("DELETE FROM invoices WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM profiles WHERE id = ?").run(id);
   res.json({ ok: true });
 });
@@ -1018,12 +1024,138 @@ app.delete("/api/profiles/:profileId/symptoms/:symptomId", (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Invoices (Notas fiscais / IR) ----------
+function rowToInvoice(r) {
+  return {
+    id: r.id,
+    date: r.date,
+    provider: r.provider,
+    doc: r.doc,
+    value: r.value,
+    category: r.category,
+    description: r.description,
+    deduct: !!r.deduct,
+    hash: r.file_hash,
+    fileName: r.pdf_filename,
+    hasPdf: !!r.has_pdf,
+    savedAt: r.saved_at,
+  };
+}
+
+app.get("/api/profiles/:profileId/invoices", (req, res) => {
+  const rows = db
+    .prepare("SELECT * FROM invoices WHERE profile_id = ? ORDER BY date DESC, saved_at DESC")
+    .all(req.params.profileId);
+  res.json(rows.map(rowToInvoice));
+});
+
+app.post("/api/extract-invoice", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
+    const { profileId } = req.body || {};
+    const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
+
+    if (profileId) {
+      const dup = db.prepare("SELECT date, provider FROM invoices WHERE profile_id = ? AND file_hash = ?").get(profileId, hash);
+      if (dup) {
+        return res.status(409).json({ error: "duplicate", date: dup.date, provider: dup.provider });
+      }
+    }
+
+    const base64 = req.file.buffer.toString("base64");
+    const text = await callClaude(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+            { type: "text", text: INVOICE_EXTRACTION_PROMPT },
+          ],
+        },
+      ],
+      1000
+    );
+    const parsed = parseExamJson(text);
+    res.json({ ...parsed, hash, base64, fileName: req.file.originalname });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao processar a nota fiscal" });
+  }
+});
+
+app.post("/api/profiles/:profileId/invoices", (req, res) => {
+  try {
+    const { profileId } = req.params;
+    const { date, provider, doc, value, category, description, deduct, base64, fileName, hash } = req.body || {};
+    if (!date || value === undefined || value === null || value === "") {
+      return res.status(400).json({ error: "Data e valor são obrigatórios" });
+    }
+    const invoiceId = uid();
+    let hasPdf = 0;
+    if (base64) {
+      try {
+        fs.writeFileSync(path.join(invoiceDir, `${invoiceId}.pdf`), Buffer.from(base64, "base64"));
+        hasPdf = 1;
+      } catch (e) {}
+    }
+    db.prepare(
+      `INSERT INTO invoices (id, profile_id, date, provider, doc, value, category, description, deduct, file_hash, pdf_filename, has_pdf, saved_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).run(
+      invoiceId,
+      profileId,
+      date,
+      provider || "",
+      doc || "",
+      Number(value) || 0,
+      category || "Outro",
+      description || "",
+      deduct === false ? 0 : 1,
+      hash || null,
+      fileName || "nota.pdf",
+      hasPdf,
+      Date.now()
+    );
+    res.json(rowToInvoice(db.prepare("SELECT * FROM invoices WHERE id = ?").get(invoiceId)));
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao salvar nota fiscal" });
+  }
+});
+
+app.get("/api/profiles/:profileId/invoices/:invoiceId/pdf", (req, res) => {
+  const { invoiceId } = req.params;
+  const invoice = db.prepare("SELECT pdf_filename as fileName FROM invoices WHERE id = ?").get(invoiceId);
+  const pdfPath = path.join(invoiceDir, `${invoiceId}.pdf`);
+  if (!invoice || !fs.existsSync(pdfPath)) return res.status(404).json({ error: "PDF não encontrado" });
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${(invoice.fileName || "nota.pdf").replace(/"/g, "")}"`);
+  fs.createReadStream(pdfPath).pipe(res);
+});
+
+app.delete("/api/profiles/:profileId/invoices/:invoiceId", (req, res) => {
+  const { invoiceId } = req.params;
+  const pdfPath = path.join(invoiceDir, `${invoiceId}.pdf`);
+  if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
+  db.prepare("DELETE FROM invoices WHERE id = ?").run(invoiceId);
+  res.json({ ok: true });
+});
+
 // ---------- Export backup ----------
 app.get("/api/export", (req, res) => {
   try {
     const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, created_at as createdAt FROM profiles").all();
-    const backup = { version: 6, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {} };
+    const backup = { version: 7, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {}, invoices: {} };
     for (const p of profiles) {
+      const invoiceRows = db
+        .prepare("SELECT * FROM invoices WHERE profile_id = ? ORDER BY date ASC, saved_at ASC")
+        .all(p.id);
+      backup.invoices[p.id] = invoiceRows.map((r) => {
+        const inv = rowToInvoice(r);
+        const pdfPath = path.join(invoiceDir, `${r.id}.pdf`);
+        if (r.has_pdf && fs.existsSync(pdfPath)) {
+          inv.pdfBase64 = fs.readFileSync(pdfPath).toString("base64");
+        }
+        return inv;
+      });
       const activityRows = db
         .prepare("SELECT * FROM activities WHERE profile_id = ? ORDER BY date ASC, created_at ASC")
         .all(p.id);
@@ -1072,7 +1204,7 @@ app.get("/api/export", (req, res) => {
 // ---------- Import backup ----------
 app.post("/api/import", (req, res) => {
   try {
-    const { profiles, batches, bodyEntries, symptoms, activities } = req.body || {};
+    const { profiles, batches, bodyEntries, symptoms, activities, invoices } = req.body || {};
     if (!Array.isArray(profiles)) return res.status(400).json({ error: "Formato de backup inválido." });
 
     let importedProfiles = 0;
@@ -1081,6 +1213,7 @@ app.post("/api/import", (req, res) => {
     let importedBodyEntries = 0;
     let importedSymptoms = 0;
     let importedActivities = 0;
+    let importedInvoices = 0;
 
     const existingNames = new Set(db.prepare("SELECT name FROM profiles").all().map((r) => r.name));
 
@@ -1169,9 +1302,39 @@ app.post("/api/import", (req, res) => {
         );
         importedActivities++;
       }
+      const invoiceList = (invoices && invoices[p.id]) || [];
+      for (const inv of invoiceList) {
+        const invoiceId = uid();
+        let hasPdf = 0;
+        if (inv.pdfBase64) {
+          try {
+            fs.writeFileSync(path.join(invoiceDir, `${invoiceId}.pdf`), Buffer.from(inv.pdfBase64, "base64"));
+            hasPdf = 1;
+          } catch (e) {}
+        }
+        db.prepare(
+          `INSERT INTO invoices (id, profile_id, date, provider, doc, value, category, description, deduct, file_hash, pdf_filename, has_pdf, saved_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).run(
+          invoiceId,
+          profileId,
+          inv.date || null,
+          inv.provider || "",
+          inv.doc || "",
+          Number(inv.value) || 0,
+          inv.category || "Outro",
+          inv.description || "",
+          inv.deduct === false ? 0 : 1,
+          inv.hash || null,
+          inv.fileName || "nota.pdf",
+          hasPdf,
+          Date.now()
+        );
+        importedInvoices++;
+      }
     }
 
-    res.json({ ok: true, importedProfiles, importedBatches, importedResults, importedBodyEntries, importedSymptoms, importedActivities });
+    res.json({ ok: true, importedProfiles, importedBatches, importedResults, importedBodyEntries, importedSymptoms, importedActivities, importedInvoices });
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao importar backup" });
   }
