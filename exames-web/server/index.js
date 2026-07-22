@@ -673,7 +673,7 @@ app.post("/api/extract", upload.single("file"), async (req, res) => {
           ],
         },
       ],
-      1000
+      8000
     );
     const parsed = parseExamJson(text);
     res.json({ ...parsed, hash, base64, fileName: req.file.originalname });
@@ -1073,7 +1073,7 @@ app.post("/api/extract-invoice", upload.single("file"), async (req, res) => {
           ],
         },
       ],
-      1000
+      8000
     );
     const parsed = parseExamJson(text);
     res.json({ ...parsed, hash, base64, fileName: req.file.originalname });

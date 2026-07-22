@@ -43,21 +43,65 @@ export function repairJson(text) {
   return parseExamJson(text);
 }
 
+// Percorre o texto caractere a caractere, respeitando strings/escapes, e acha o
+// último ponto em que uma estrutura ({...} ou [...]) foi fechada por completo.
+// Isso é bem mais confiável do que procurar a última ocorrência literal de "},",
+// que pode aparecer dentro de um valor de texto e cortar a estrutura errada.
+function findLastSafeJsonCut(t) {
+  let inString = false;
+  let escape = false;
+  let lastSafeCut = -1;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "}" || ch === "]") lastSafeCut = i + 1;
+  }
+  return lastSafeCut;
+}
+
+function closeOpenBrackets(t) {
+  let inString = false;
+  let escape = false;
+  const stack = [];
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "{" || ch === "[") stack.push(ch);
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  let out = t;
+  while (stack.length) {
+    out += stack.pop() === "{" ? "}" : "]";
+  }
+  return out;
+}
+
 export function parseExamJson(text) {
   const t = extractJsonBlock(text);
   try {
     return JSON.parse(t);
   } catch (e) {
-    const lastComplete = t.lastIndexOf("},");
-    if (lastComplete === -1) throw e;
-    let repaired = t.slice(0, lastComplete + 1);
-    const openArr = (repaired.match(/\[/g) || []).length;
-    const closeArr = (repaired.match(/\]/g) || []).length;
-    const openObj = (repaired.match(/\{/g) || []).length;
-    const closeObj = (repaired.match(/\}/g) || []).length;
-    repaired += "]".repeat(Math.max(0, openArr - closeArr));
-    repaired += "}".repeat(Math.max(0, openObj - closeObj));
-    return JSON.parse(repaired);
+    const cut = findLastSafeJsonCut(t);
+    if (cut === -1) throw e;
+    let repaired = t.slice(0, cut).replace(/,\s*$/, "");
+    repaired = closeOpenBrackets(repaired);
+    try {
+      return JSON.parse(repaired);
+    } catch (e2) {
+      throw e;
+    }
   }
 }
 
