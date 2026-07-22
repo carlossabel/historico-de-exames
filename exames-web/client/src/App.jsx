@@ -3,7 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
-  FileUp, Download, Bell, Weight, Pencil, Stethoscope, Dumbbell, Camera, Watch, Link, Copy, RefreshCw,
+  FileUp, Download, Weight, Pencil, Stethoscope, Dumbbell, Camera, Watch, Link, Copy, RefreshCw,
   Footprints, PersonStanding, Bike, Waves, Mountain, CircleDot, Music, Zap, Flame, Receipt,
 } from "lucide-react";
 import * as api from "./api.js";
@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-22d · Painel: novos cards \"Exames que melhoraram\" e \"Exames que pioraram\" (quantidade nos últimos 180 dias)";
+const APP_BUILD = "2026-07-22f · Cards de exames que melhoraram/pioraram no Painel agora abrem a aba Exames já filtrada pelos exames do card";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -33,6 +33,11 @@ const PROFILE_COLORS = [
 const INVOICE_CATEGORIES = [
   "Consulta médica", "Exame", "Odontológico", "Hospital", "Plano de saúde",
   "Fisioterapia", "Psicólogo", "Terapia ocupacional", "Fonoaudiologia", "Medicamento", "Outro",
+];
+
+const HEREDITARY_CONDITIONS_OPTIONS = [
+  "Diabetes", "Hipertensão", "Doença cardíaca", "Câncer", "Colesterol alto",
+  "Obesidade", "Doença renal", "Doença da tireoide", "AVC", "Alzheimer/Demência", "Asma/Alergias",
 ];
 
 function downloadJson(filename, obj) {
@@ -545,10 +550,16 @@ function AddProfileModal({ onClose, onConfirm }) {
   const [birthDate, setBirthDate] = useState("");
   const [gender, setGender] = useState("");
   const [heightCm, setHeightCm] = useState("");
+  const [whatsapp, setWhatsapp] = useState("");
+  const [hereditaryConditions, setHereditaryConditions] = useState([]);
+
+  const toggleCondition = (c) => {
+    setHereditaryConditions((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
+  };
 
   const confirm = () => {
     if (!name.trim()) return;
-    onConfirm(name.trim(), { birthDate: birthDate || null, gender: gender || null, heightCm: heightCm || null });
+    onConfirm(name.trim(), { birthDate: birthDate || null, gender: gender || null, heightCm: heightCm || null, whatsapp: whatsapp || null, hereditaryConditions });
   };
 
   return (
@@ -595,6 +606,34 @@ function AddProfileModal({ onClose, onConfirm }) {
       <p className="text-xs text-slate-400 mb-4">
         Tudo opcional — altura é usada para o IMC, e sexo pra classificar a faixa ideal de gordura corporal na aba Saúde física. Pode preencher depois também.
       </p>
+
+      <label className="text-xs text-slate-500 mb-1 block">WhatsApp</label>
+      <input
+        type="tel"
+        value={whatsapp}
+        onChange={(e) => setWhatsapp(e.target.value)}
+        placeholder="Ex: (11) 91234-5678"
+        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-300"
+      />
+
+      <label className="text-xs text-slate-500 mb-1.5 block">Problemas de saúde hereditários (histórico familiar)</label>
+      <div className="flex flex-wrap gap-1.5 mb-4">
+        {HEREDITARY_CONDITIONS_OPTIONS.map((c) => (
+          <button
+            key={c}
+            type="button"
+            onClick={() => toggleCondition(c)}
+            className={`text-xs px-2.5 py-1.5 rounded-full border transition ${
+              hereditaryConditions.includes(c)
+                ? "bg-slate-900 border-slate-900 text-white"
+                : "border-slate-300 text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            {c}
+          </button>
+        ))}
+      </div>
+
       <div className="flex justify-end gap-2">
         <button onClick={onClose} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
         <button disabled={!name.trim()} onClick={confirm} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800">
@@ -610,15 +649,21 @@ function EditProfileModal({ profile, onClose, onSave }) {
   const [birthDate, setBirthDate] = useState(profile.birthDate || "");
   const [gender, setGender] = useState(profile.gender || "");
   const [heightCm, setHeightCm] = useState(profile.heightCm ?? "");
+  const [whatsapp, setWhatsapp] = useState(profile.whatsapp || "");
+  const [hereditaryConditions, setHereditaryConditions] = useState(Array.isArray(profile.hereditaryConditions) ? profile.hereditaryConditions : []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+
+  const toggleCondition = (c) => {
+    setHereditaryConditions((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
+  };
 
   const handleSave = async () => {
     if (!name.trim()) return;
     setSaving(true);
     setError(null);
     try {
-      await onSave({ name: name.trim(), birthDate: birthDate || null, gender: gender || null, heightCm: heightCm || null });
+      await onSave({ name: name.trim(), birthDate: birthDate || null, gender: gender || null, heightCm: heightCm || null, whatsapp: whatsapp || null, hereditaryConditions });
     } catch (e) {
       setError(e.message || "Erro ao salvar perfil.");
     } finally {
@@ -668,6 +713,34 @@ function EditProfileModal({ profile, onClose, onSave }) {
       <p className="text-xs text-slate-400 mb-4">
         Altura é usada para calcular o IMC. Sexo é usado para classificar a faixa ideal de gordura corporal na aba Saúde física — nada aqui é obrigatório.
       </p>
+
+      <label className="text-xs text-slate-500 mb-1 block">WhatsApp</label>
+      <input
+        type="tel"
+        value={whatsapp}
+        onChange={(e) => setWhatsapp(e.target.value)}
+        placeholder="Ex: (11) 91234-5678"
+        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-300"
+      />
+
+      <label className="text-xs text-slate-500 mb-1.5 block">Problemas de saúde hereditários (histórico familiar)</label>
+      <div className="flex flex-wrap gap-1.5 mb-4">
+        {HEREDITARY_CONDITIONS_OPTIONS.map((c) => (
+          <button
+            key={c}
+            type="button"
+            onClick={() => toggleCondition(c)}
+            className={`text-xs px-2.5 py-1.5 rounded-full border transition ${
+              hereditaryConditions.includes(c)
+                ? "bg-slate-900 border-slate-900 text-white"
+                : "border-slate-300 text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            {c}
+          </button>
+        ))}
+      </div>
+
       {error && (
         <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
@@ -794,12 +867,26 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
   const [reviewData, setReviewData] = useState(null);
-  const [tipsOpen, setTipsOpen] = useState(false);
   const [selectedExam, setSelectedExam] = useState(null);
-  const [alertsInfo, setAlertsInfo] = useState(null);
   const [tab, setTab] = useState(initialTab || "painel");
+  const [examNameFilter, setExamNameFilter] = useState(null); // { examNames: [...], label: "..." } | null
   const [editProfileOpen, setEditProfileOpen] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Troca de aba "normal" (clique direto na aba): sempre limpa o filtro de exames
+  // vindo dos cards do Painel, pra não ficar um filtro "escondido" ativo.
+  const goToTab = (t) => {
+    setTab(t);
+    setExamNameFilter(null);
+  };
+
+  // Navegação vinda dos cards do Painel: pode trazer um filtro de exames específicos
+  // (ex: "Exames que melhoraram/pioraram"), que fica ativo só até o usuário limpar ou
+  // trocar de aba manualmente.
+  const goToTabWithFilter = (t, opts) => {
+    setTab(t);
+    setExamNameFilter(opts && opts.examNames ? opts : null);
+  };
 
   const load = useCallback(async () => {
     const idx = await api.getBatchIndex(profile.id);
@@ -809,16 +896,7 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
     setBatches(loaded);
   }, [profile.id]);
 
-  const refreshAlerts = useCallback(async () => {
-    try {
-      setAlertsInfo(await api.getAlerts(profile.id));
-    } catch (e) {
-      setAlertsInfo(null);
-    }
-  }, [profile.id]);
-
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { refreshAlerts(); }, [refreshAlerts]);
 
   const saveProfileEdit = async (payload) => {
     const updated = await api.updateProfile(profile.id, payload);
@@ -866,14 +944,12 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
     setIndex((prev) => [...(prev || []), newIndexEntry].sort((a, b) => (b.date || "").localeCompare(a.date || "")));
     setBatches((prev) => ({ ...prev, [batchId]: { date: data.date, lab: data.lab, doctor: data.doctor, results: data.results } }));
     setReviewData(null);
-    refreshAlerts();
   };
 
   const removeBatch = async (batchId) => {
     await api.deleteBatch(profile.id, batchId);
     setIndex((prev) => (prev || []).filter((b) => b.batchId !== batchId));
     setBatches((prev) => { const n = { ...prev }; delete n[batchId]; return n; });
-    refreshAlerts();
   };
 
   const editBatch = async (batchId, payload) => {
@@ -892,9 +968,13 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
   // (Não usamos useMemo aqui de propósito: este trecho já vem depois de um "return" condicional
   // mais acima no componente, e chamar hooks depois de um retorno condicional quebra as Rules of Hooks.)
   const mergedResults = mergeLatestExamResults(orderedBatchIds, batches);
+  const filteredExamResults = examNameFilter
+    ? mergedResults.filter((r) =>
+        examNameFilter.examNames.some((n) => n.trim().toLowerCase() === (r.name || "").trim().toLowerCase())
+      )
+    : mergedResults;
 
   const c = PROFILE_COLORS[profile.colorIdx % PROFILE_COLORS.length];
-  const hasSuggestions = !!(alertsInfo && alertsInfo.data && alertsInfo.data.temSugestoes);
 
   return (
     <div>
@@ -928,37 +1008,37 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
 
       <div className="flex items-center gap-1 mb-6 border-b border-slate-200 overflow-x-auto">
         <button
-          onClick={() => setTab("painel")}
+          onClick={() => goToTab("painel")}
           className={`text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "painel" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
         >
           Painel
         </button>
         <button
-          onClick={() => setTab("exames")}
+          onClick={() => goToTab("exames")}
           className={`text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "exames" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
         >
           Exames
         </button>
         <button
-          onClick={() => setTab("corpo")}
+          onClick={() => goToTab("corpo")}
           className={`text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "corpo" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
         >
           Saúde física
         </button>
         <button
-          onClick={() => setTab("sintomas")}
+          onClick={() => goToTab("sintomas")}
           className={`text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "sintomas" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
         >
           Sintomas
         </button>
         <button
-          onClick={() => setTab("atividades")}
+          onClick={() => goToTab("atividades")}
           className={`text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "atividades" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
         >
           Atividades
         </button>
         <button
-          onClick={() => setTab("notas")}
+          onClick={() => goToTab("notas")}
           className={`flex items-center gap-1.5 text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "notas" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
         >
           <Receipt size={14} /> Notas fiscais (IR)
@@ -970,9 +1050,7 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
           profileId={profile.id}
           profileName={profile.name}
           profile={profile}
-          hasSuggestions={hasSuggestions}
-          onOpenTips={() => setTipsOpen(true)}
-          onGoTo={(t) => setTab(t)}
+          onGoTo={goToTabWithFilter}
         />
       )}
 
@@ -998,13 +1076,29 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
         </div>
       )}
 
-      {mergedResults.length ? (
-        <ExamTable results={mergedResults} onSelectExam={(name) => setSelectedExam(name)} />
-      ) : (
+      {examNameFilter && (
+        <div className="mb-4 flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5">
+          <span className="text-sm text-slate-600">
+            Filtro: <span className="font-medium text-slate-800">{examNameFilter.label}</span> · {filteredExamResults.length} exame{filteredExamResults.length !== 1 ? "s" : ""}
+          </span>
+          <button onClick={() => setExamNameFilter(null)} className="text-xs text-slate-500 hover:text-slate-800 underline whitespace-nowrap">
+            Limpar filtro
+          </button>
+        </div>
+      )}
+
+      {mergedResults.length === 0 ? (
         <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
           <FileText size={28} className="mx-auto mb-2" />
           <p className="text-sm">Nenhum exame ainda. Envie o primeiro PDF de laudo para começar.</p>
         </div>
+      ) : filteredExamResults.length === 0 ? (
+        <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
+          <FileText size={28} className="mx-auto mb-2" />
+          <p className="text-sm">Nenhum exame corresponde a esse filtro.</p>
+        </div>
+      ) : (
+        <ExamTable results={filteredExamResults} onSelectExam={(name) => setSelectedExam(name)} />
       )}
 
       {index.length > 0 && <BatchHistory index={index} profileId={profile.id} onDelete={removeBatch} onEdit={editBatch} />}
@@ -1012,15 +1106,6 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
       {selectedExam && <ExamEvolutionModal examName={selectedExam} orderedBatchIds={orderedBatchIds} batches={batches} profileId={profile.id} onClose={() => setSelectedExam(null)} />}
 
       {reviewData && <ReviewModal data={reviewData} onCancel={() => setReviewData(null)} onConfirm={saveBatch} />}
-
-      {tipsOpen && (
-        <TipsModal
-          profileId={profile.id}
-          alertsInfo={alertsInfo}
-          onAlertsChange={setAlertsInfo}
-          onClose={() => setTipsOpen(false)}
-        />
-      )}
       </>
       )}
 
@@ -1476,248 +1561,6 @@ function ReviewModal({ data, onCancel, onConfirm }) {
         >
           Salvar no histórico
         </button>
-      </div>
-    </ModalShell>
-  );
-}
-
-const URGENCY_META = {
-  baixa: { label: "Baixa", chip: "bg-slate-100 text-slate-600" },
-  media: { label: "Média", chip: "bg-amber-100 text-amber-700" },
-  alta: { label: "Alta", chip: "bg-red-100 text-red-700" },
-};
-
-const COMBINED_DISCLAIMER = "As dicas e as sugestões de exames acima são geradas por IA a partir dos seus resultados e servem como ponto de partida — não substituem uma avaliação médica. Leve esses resultados a um médico para interpretação e conduta.";
-
-function TipsModal({ profileId, alertsInfo, onAlertsChange, onClose }) {
-  const [tipsInfo, setTipsInfo] = useState(null);
-  const [loadingTips, setLoadingTips] = useState(true);
-  const [generatingTips, setGeneratingTips] = useState(false);
-  const [tipsError, setTipsError] = useState(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [history, setHistory] = useState(null);
-
-  const [analyzing, setAnalyzing] = useState(false);
-  const [alertsError, setAlertsError] = useState(null);
-
-  const loadTips = useCallback(async () => {
-    try {
-      setTipsInfo(await api.getTips(profileId));
-    } catch (e) {
-      setTipsError(e.message || "Não consegui carregar as dicas.");
-    } finally {
-      setLoadingTips(false);
-    }
-  }, [profileId]);
-
-  useEffect(() => { loadTips(); }, [loadTips]);
-
-  const runGenerateTips = async () => {
-    setGeneratingTips(true);
-    setTipsError(null);
-    try {
-      const data = await api.generateTips(profileId);
-      setTipsInfo(data);
-      if (historyOpen) setHistory(await api.getTipsHistory(profileId));
-    } catch (e) {
-      setTipsError(e.message || "Não consegui gerar as dicas agora.");
-    } finally {
-      setGeneratingTips(false);
-    }
-  };
-
-  const toggleHistory = async () => {
-    if (!historyOpen && history === null) {
-      setHistory(await api.getTipsHistory(profileId));
-    }
-    setHistoryOpen((v) => !v);
-  };
-
-  const runAnalyze = async () => {
-    setAnalyzing(true);
-    setAlertsError(null);
-    try {
-      const data = await api.analyzeAlerts(profileId);
-      onAlertsChange(data);
-    } catch (e) {
-      setAlertsError(e.message || "Erro ao analisar histórico.");
-    } finally {
-      setAnalyzing(false);
-    }
-  };
-
-  const hasTipsData = tipsInfo ? tipsInfo.hasData : true;
-  const tips = tipsInfo?.data || null;
-  const tipsStale = !!tipsInfo?.stale;
-
-  const hasData = alertsInfo ? alertsInfo.hasData : true;
-  const alertsData = alertsInfo?.data || null;
-  const stale = !!alertsInfo?.stale;
-
-  return (
-    <ModalShell onClose={onClose} title="Dicas de saúde" wide>
-      {loadingTips && (
-        <div className="flex items-center gap-2 text-slate-400 text-sm py-8 justify-center">
-          <Loader2 size={16} className="animate-spin" /> Carregando...
-        </div>
-      )}
-
-      {!loadingTips && !hasTipsData && (
-        <p className="text-sm text-slate-500 mb-4">Adicione ao menos um exame, uma medição de composição corporal, um sintoma ou uma atividade física para gerar dicas.</p>
-      )}
-
-      {!loadingTips && hasTipsData && !tips && !generatingTips && (
-        <div className="mb-4">
-          <p className="text-sm text-slate-500 mb-3">
-            A IA pode gerar dicas de estilo de vida cruzando exames, composição corporal, sintomas relatados e atividades físicas. As dicas
-            ficam guardadas — ela só é chamada de novo quando você pedir, pra não gastar tokens à toa.
-          </p>
-          <button onClick={runGenerateTips} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800">
-            Gerar dicas agora
-          </button>
-        </div>
-      )}
-
-      {generatingTips && (
-        <div className="flex items-center gap-2 text-slate-400 text-sm py-8 justify-center">
-          <Loader2 size={16} className="animate-spin" /> Gerando dicas...
-        </div>
-      )}
-
-      {tipsError && (
-        <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
-          <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {tipsError}
-        </div>
-      )}
-
-      {tips && !generatingTips && (
-        <div>
-          {tipsStale && (
-            <div className="mb-3 flex items-center justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-              <span className="flex items-center gap-1.5"><Info size={13} /> Há dados novos desde a última geração.</span>
-              <button onClick={runGenerateTips} className="underline whitespace-nowrap shrink-0">Gerar de novo</button>
-            </div>
-          )}
-          <p className="text-xs text-slate-400 mb-2">
-            Gerado em {new Date(tipsInfo.createdAt).toLocaleDateString("pt-BR")}
-          </p>
-          <p className="text-sm text-slate-700 mb-4">{tips.resumo}</p>
-          <ul className="space-y-2 mb-3">
-            {(tips.dicas || []).map((d, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
-                <CheckCircle2 size={15} className="text-emerald-500 mt-0.5 shrink-0" /> {d}
-              </li>
-            ))}
-          </ul>
-          <div className="flex items-center gap-3 mb-2">
-            {!tipsStale && (
-              <button onClick={runGenerateTips} className="text-xs text-slate-500 hover:text-slate-800 underline">
-                Gerar de novo
-              </button>
-            )}
-            <button onClick={toggleHistory} className="text-xs text-slate-500 hover:text-slate-800 underline">
-              {historyOpen ? "Ocultar histórico" : "Ver histórico de dicas anteriores"}
-            </button>
-          </div>
-
-          {historyOpen && (
-            <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 mb-2">
-              {history === null ? (
-                <div className="flex items-center gap-2 text-slate-400 text-xs py-3 justify-center">
-                  <Loader2 size={13} className="animate-spin" /> Carregando histórico...
-                </div>
-              ) : history.length <= 1 ? (
-                <p className="text-xs text-slate-400 px-3 py-2">Ainda não há gerações anteriores.</p>
-              ) : (
-                history.slice(1).map((h) => (
-                  <div key={h.id} className="px-3 py-2">
-                    <p className="text-xs text-slate-400 mb-1">{new Date(h.createdAt).toLocaleDateString("pt-BR")}</p>
-                    <p className="text-xs text-slate-600">{h.resumo}</p>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="border-t border-slate-100 pt-4 mt-3">
-        <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-1.5">
-          <Bell size={12} /> Sugestão de novos exames
-        </p>
-
-        {!hasData && (
-          <p className="text-sm text-slate-500">Adicione ao menos um exame, uma medição de composição corporal, um sintoma ou uma atividade física para essa pessoa antes de pedir uma análise.</p>
-        )}
-
-        {hasData && !alertsData && !analyzing && (
-          <div>
-            <p className="text-sm text-slate-500 mb-3">
-              A IA pode cruzar exames, composição corporal, sintomas relatados e atividades físicas para dizer se algum exame novo faz
-              sentido pedir — só sugere quando há um motivo real nos dados, não fica pedindo exame à toa.
-            </p>
-            <button onClick={runAnalyze} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800">
-              Analisar agora
-            </button>
-          </div>
-        )}
-
-        {analyzing && (
-          <div className="flex items-center gap-2 text-slate-400 text-sm py-4 justify-center">
-            <Loader2 size={16} className="animate-spin" /> Analisando o histórico...
-          </div>
-        )}
-
-        {alertsError && (
-          <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
-            <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {alertsError}
-          </div>
-        )}
-
-        {alertsData && !analyzing && (
-          <div>
-            {stale && (
-              <div className="mb-3 flex items-center justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                <span className="flex items-center gap-1.5"><Info size={13} /> Há dados novos desde a última análise.</span>
-                <button onClick={runAnalyze} className="underline whitespace-nowrap shrink-0">Atualizar análise</button>
-              </div>
-            )}
-
-            <p className="text-sm text-slate-700 mb-3">{alertsData.resumo}</p>
-
-            {alertsData.temSugestoes && (alertsData.sugestoes || []).length > 0 ? (
-              <ul className="space-y-3 mb-2">
-                {alertsData.sugestoes.map((s, i) => {
-                  const meta = URGENCY_META[s.urgencia] || URGENCY_META.baixa;
-                  return (
-                    <li key={i} className="border border-slate-200 rounded-lg p-3">
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <p className="text-sm font-medium text-slate-900">{s.exame}</p>
-                        <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${meta.chip}`}>{meta.label}</span>
-                      </div>
-                      <p className="text-xs text-slate-500">{s.motivo}</p>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : (
-              <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5 mb-2 text-sm">
-                <CheckCircle2 size={16} className="shrink-0" />
-                Nada no histórico justifica pedir exames novos agora.
-              </div>
-            )}
-
-            {!stale && (
-              <button onClick={runAnalyze} className="text-xs text-slate-500 hover:text-slate-800 underline">
-                Analisar de novo
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="flex items-start gap-2 text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 mt-4">
-        <Info size={13} className="mt-0.5 shrink-0" /> {COMBINED_DISCLAIMER}
       </div>
     </ModalShell>
   );
@@ -2912,7 +2755,7 @@ function DashboardCard({ title, onClick, children }) {
   );
 }
 
-function DashboardScreen({ profileId, profileName, profile, hasSuggestions, onOpenTips, onGoTo }) {
+function DashboardScreen({ profileId, profileName, profile, onGoTo }) {
   const [loading, setLoading] = useState(true);
   const [index, setIndex] = useState([]);
   const [batches, setBatches] = useState({});
@@ -3055,7 +2898,10 @@ function DashboardScreen({ profileId, profileName, profile, hasSuggestions, onOp
           )}
         </DashboardCard>
 
-        <DashboardCard title="Exames que melhoraram" onClick={() => onGoTo("exames")}>
+        <DashboardCard
+          title="Exames que melhoraram"
+          onClick={() => onGoTo("exames", { examNames: examTrends.improved, label: "Exames que melhoraram (180 dias)" })}
+        >
           <div className="flex items-end gap-2 mb-2">
             <TrendingUp size={16} className="text-emerald-600 mb-1" />
             <span className="text-2xl font-medium text-slate-900">{examTrends.improved.length}</span>
@@ -3072,7 +2918,10 @@ function DashboardScreen({ profileId, profileName, profile, hasSuggestions, onOp
           )}
         </DashboardCard>
 
-        <DashboardCard title="Exames que pioraram" onClick={() => onGoTo("exames")}>
+        <DashboardCard
+          title="Exames que pioraram"
+          onClick={() => onGoTo("exames", { examNames: examTrends.worsened, label: "Exames que pioraram (180 dias)" })}
+        >
           <div className="flex items-end gap-2 mb-2">
             <TrendingDown size={16} className="text-red-600 mb-1" />
             <span className="text-2xl font-medium text-slate-900">{examTrends.worsened.length}</span>
@@ -3089,17 +2938,6 @@ function DashboardScreen({ profileId, profileName, profile, hasSuggestions, onOp
           )}
         </DashboardCard>
       </div>
-
-      <button
-        onClick={onOpenTips}
-        className="relative w-full flex items-center justify-between gap-3 bg-slate-50 hover:bg-slate-100 transition border border-slate-200 rounded-xl px-4 py-3"
-      >
-        <span className="flex items-center gap-2 text-sm text-slate-700">
-          <Bell size={15} /> Dicas de saúde e sugestão de exames, cruzando tudo isso com IA
-          {hasSuggestions && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" />}
-        </span>
-        <ChevronRight size={16} className="text-slate-400 shrink-0" />
-      </button>
 
       {!latestBatchMeta && !latestBody && !activeSymptoms.length && weeklyMinutes === 0 && (
         <p className="text-sm text-slate-400 text-center mt-6">

@@ -21,37 +21,53 @@ function uid() {
 }
 
 // ---------- Profiles ----------
+function parseHereditary(raw) {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    return [];
+  }
+}
+
 app.get("/api/profiles", (req, res) => {
   const rows = db
-    .prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, created_at as createdAt FROM profiles ORDER BY created_at ASC")
-    .all();
+    .prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, created_at as createdAt FROM profiles ORDER BY created_at ASC")
+    .all()
+    .map((r) => ({ ...r, hereditaryConditions: parseHereditary(r.hereditaryConditions) }));
   res.json(rows);
 });
 
 app.post("/api/profiles", (req, res) => {
-  const { name, birthDate, gender, heightCm } = req.body || {};
+  const { name, birthDate, gender, heightCm, whatsapp, hereditaryConditions } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: "Nome obrigatório" });
   const count = db.prepare("SELECT COUNT(*) as c FROM profiles").get().c;
   const id = uid();
   const colorIdx = count % 8;
   const createdAt = Date.now();
-  db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
-    id, name.trim(), colorIdx, birthDate || null, gender || null, numOrNull(heightCm), createdAt
+  const hereditaryJson = JSON.stringify(Array.isArray(hereditaryConditions) ? hereditaryConditions : []);
+  db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, whatsapp, hereditary_conditions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+    id, name.trim(), colorIdx, birthDate || null, gender || null, numOrNull(heightCm), whatsapp || null, hereditaryJson, createdAt
   );
-  res.json({ id, name: name.trim(), colorIdx, birthDate: birthDate || null, gender: gender || null, heightCm: numOrNull(heightCm), createdAt });
+  res.json({
+    id, name: name.trim(), colorIdx, birthDate: birthDate || null, gender: gender || null, heightCm: numOrNull(heightCm),
+    whatsapp: whatsapp || null, hereditaryConditions: Array.isArray(hereditaryConditions) ? hereditaryConditions : [], createdAt,
+  });
 });
 
 app.put("/api/profiles/:id", (req, res) => {
   const { id } = req.params;
   const existing = db.prepare("SELECT id FROM profiles WHERE id = ?").get(id);
   if (!existing) return res.status(404).json({ error: "Perfil não encontrado" });
-  const { name, birthDate, gender, heightCm } = req.body || {};
+  const { name, birthDate, gender, heightCm, whatsapp, hereditaryConditions } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: "Nome obrigatório" });
-  db.prepare("UPDATE profiles SET name = ?, birth_date = ?, gender = ?, height_cm = ? WHERE id = ?").run(
-    name.trim(), birthDate || null, gender || null, numOrNull(heightCm), id
+  const hereditaryJson = JSON.stringify(Array.isArray(hereditaryConditions) ? hereditaryConditions : []);
+  db.prepare("UPDATE profiles SET name = ?, birth_date = ?, gender = ?, height_cm = ?, whatsapp = ?, hereditary_conditions = ? WHERE id = ?").run(
+    name.trim(), birthDate || null, gender || null, numOrNull(heightCm), whatsapp || null, hereditaryJson, id
   );
-  const row = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, created_at as createdAt FROM profiles WHERE id = ?").get(id);
-  res.json(row);
+  const row = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, created_at as createdAt FROM profiles WHERE id = ?").get(id);
+  res.json({ ...row, hereditaryConditions: parseHereditary(row.hereditaryConditions) });
 });
 
 app.delete("/api/profiles/:id", (req, res) => {
@@ -1154,8 +1170,9 @@ app.delete("/api/profiles/:profileId/invoices/:invoiceId", (req, res) => {
 // ---------- Export backup ----------
 app.get("/api/export", (req, res) => {
   try {
-    const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, created_at as createdAt FROM profiles").all();
-    const backup = { version: 7, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {}, invoices: {} };
+    const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, created_at as createdAt FROM profiles").all()
+      .map((p) => ({ ...p, hereditaryConditions: parseHereditary(p.hereditaryConditions) }));
+    const backup = { version: 8, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {}, invoices: {} };
     for (const p of profiles) {
       const invoiceRows = db
         .prepare("SELECT * FROM invoices WHERE profile_id = ? ORDER BY date ASC, saved_at ASC")
@@ -1236,13 +1253,15 @@ app.post("/api/import", (req, res) => {
         profileId = uid(); // avoid id collision with existing data
       }
       const count = db.prepare("SELECT COUNT(*) as c FROM profiles").get().c;
-      db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, created_at) VALUES (?,?,?,?,?,?,?)").run(
+      db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, whatsapp, hereditary_conditions, created_at) VALUES (?,?,?,?,?,?,?,?,?)").run(
         profileId,
         p.name || "Sem nome",
         typeof p.colorIdx === "number" ? p.colorIdx : count % 8,
         p.birthDate || null,
         p.gender || null,
         numOrNull(p.heightCm),
+        p.whatsapp || null,
+        JSON.stringify(Array.isArray(p.hereditaryConditions) ? p.hereditaryConditions : []),
         p.createdAt || Date.now()
       );
       importedProfiles++;

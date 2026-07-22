@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS profiles (
   birth_date TEXT,
   gender TEXT,
   height_cm REAL,
+  whatsapp TEXT,
+  hereditary_conditions TEXT,
   created_at INTEGER NOT NULL
 );
 
@@ -216,6 +218,12 @@ if (!profilesCols.includes("gender")) {
 }
 if (!profilesCols.includes("height_cm")) {
   db.exec("ALTER TABLE profiles ADD COLUMN height_cm REAL");
+}
+if (!profilesCols.includes("whatsapp")) {
+  db.exec("ALTER TABLE profiles ADD COLUMN whatsapp TEXT");
+}
+if (!profilesCols.includes("hereditary_conditions")) {
+  db.exec("ALTER TABLE profiles ADD COLUMN hereditary_conditions TEXT");
 }
 
 // Migração leve: bancos criados antes dos sintomas/composição corporal só tinham
