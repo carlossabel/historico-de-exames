@@ -1,17 +1,17 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Dot } from "recharts";
 import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
   FileUp, Download, Bell, Weight, Pencil, Stethoscope, Dumbbell, Camera, Watch, Link, Copy, RefreshCw,
-  Footprints, PersonStanding, Bike, Waves, Mountain, CircleDot, Music, Zap, Flame, Receipt,
+  Footprints, PersonStanding, Bike, Waves, Mountain, CircleDot, Music, Zap, Flame,
 } from "lucide-react";
 import * as api from "./api.js";
 
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-22a · Nova aba \"Notas fiscais (IR)\": upload de nota/recibo médico com leitura automática por IA e exportação em CSV para a declaração";
+const APP_BUILD = "2026-07-21l · Painel corrigido: score e peso agora consideram todos os laudos/medições, não só os mais recentes";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -30,11 +30,6 @@ const PROFILE_COLORS = [
   { bg: "bg-rose-100", text: "text-rose-700" },
 ];
 
-const INVOICE_CATEGORIES = [
-  "Consulta médica", "Exame", "Odontológico", "Hospital", "Plano de saúde",
-  "Fisioterapia", "Psicólogo", "Terapia ocupacional", "Fonoaudiologia", "Medicamento", "Outro",
-];
-
 function downloadJson(filename, obj) {
   try {
     const blob = new Blob([JSON.stringify(obj)], { type: "application/json" });
@@ -50,27 +45,6 @@ function downloadJson(filename, obj) {
   } catch (e) {
     return false;
   }
-}
-
-function downloadBlob(filename, content, mime) {
-  try {
-    const blob = new Blob([content], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
-function fmtBRL(v) {
-  return (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
 function uid() {
@@ -754,7 +728,7 @@ function ImportModal({ onClose, onDone }) {
         <div>
           <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5 mb-4 text-sm">
             <CheckCircle2 size={16} className="shrink-0" />
-            Importado: {result.importedProfiles} perfil(is), {result.importedBatches} laudo(s), {result.importedResults} resultado(s){typeof result.importedInvoices === "number" ? `, ${result.importedInvoices} nota(s) fiscal(is)` : ""}.
+            Importado: {result.importedProfiles} perfil(is), {result.importedBatches} laudo(s), {result.importedResults} resultado(s).
           </div>
           <div className="flex justify-end">
             <button onClick={onClose} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800">Fechar</button>
@@ -934,12 +908,6 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
         >
           Atividades
         </button>
-        <button
-          onClick={() => setTab("notas")}
-          className={`flex items-center gap-1.5 text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "notas" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
-        >
-          <Receipt size={14} /> Notas fiscais (IR)
-        </button>
       </div>
 
       {tab === "painel" && (
@@ -958,8 +926,6 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
       {tab === "sintomas" && <SymptomsScreen profileId={profile.id} />}
 
       {tab === "atividades" && <ActivitiesScreen profileId={profile.id} />}
-
-      {tab === "notas" && <InvoicesPanel profileId={profile.id} />}
 
       {tab === "exames" && (
       <>
@@ -3048,274 +3014,5 @@ function DashboardScreen({ profileId, profileName, profile, hasSuggestions, onOp
         </p>
       )}
     </div>
-  );
-}
-
-// ---------- Invoices (Notas fiscais / IR) ----------
-
-function InvoicesPanel({ profileId }) {
-  const [invoices, setInvoices] = useState(null);
-  const [year, setYear] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState(null);
-  const [reviewData, setReviewData] = useState(null);
-  const [confirmDelete, setConfirmDelete] = useState(null);
-  const fileInputRef = useRef(null);
-
-  const load = useCallback(async () => {
-    const list = await api.getInvoices(profileId);
-    setInvoices(list);
-  }, [profileId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const years = useMemo(
-    () => [...new Set((invoices || []).map((i) => (i.date || "").slice(0, 4)).filter(Boolean))].sort().reverse(),
-    [invoices]
-  );
-
-  useEffect(() => {
-    if (!year && years.length) setYear(years[0]);
-  }, [years, year]);
-
-  const handleFile = async (file) => {
-    setUploadError(null);
-    setUploading(true);
-    try {
-      if (file.size > 8 * 1024 * 1024) {
-        throw new Error("Esse PDF passa de 8MB — tente um arquivo menor.");
-      }
-      const parsed = await api.extractInvoice(profileId, file);
-      setReviewData({
-        date: parsed.d || new Date().toISOString().slice(0, 10),
-        provider: parsed.prov || "",
-        doc: parsed.doc || "",
-        value: parsed.v ?? "",
-        description: parsed.desc || "",
-        category: parsed.cat || "Outro",
-        deduct: parsed.deduct !== false,
-        base64: parsed.base64,
-        fileName: parsed.fileName,
-        hash: parsed.hash,
-      });
-    } catch (e) {
-      if (e.duplicate) {
-        setUploadError(`Essa nota já foi importada antes (${fmtDate(e.dupInfo.date)}, ${e.dupInfo.provider || "prestador não informado"}). Não vou importar de novo para não duplicar.`);
-      } else {
-        setUploadError(e.message || "Não consegui ler esse PDF. Tente novamente ou adicione manualmente.");
-      }
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const saveInvoiceHandler = async (data) => {
-    const saved = await api.saveInvoice(profileId, data);
-    setInvoices((prev) => [saved, ...(prev || [])].sort((a, b) => (b.date || "").localeCompare(a.date || "")));
-    setReviewData(null);
-  };
-
-  const removeInvoice = async (id) => {
-    await api.deleteInvoice(profileId, id);
-    setInvoices((prev) => (prev || []).filter((i) => i.id !== id));
-  };
-
-  const exportCsv = () => {
-    const rows = (invoices || []).filter((i) => !year || (i.date || "").startsWith(year));
-    const header = "Data;Prestador;CPF/CNPJ;Valor;Categoria;Descricao;Dedutivel\n";
-    const body = rows
-      .map((r) =>
-        [
-          fmtDate(r.date),
-          (r.provider || "").replace(/;/g, ","),
-          r.doc || "",
-          (r.value || 0).toFixed(2).replace(".", ","),
-          r.category || "Outro",
-          (r.description || "").replace(/;/g, ","),
-          r.deduct ? "Sim" : "Não",
-        ].join(";")
-      )
-      .join("\n");
-    downloadBlob(`notas-fiscais-${year || "todas"}.csv`, "\uFEFF" + header + body, "text/csv;charset=utf-8");
-  };
-
-  if (invoices === null) {
-    return <div className="flex justify-center py-16 text-slate-400"><Loader2 className="animate-spin" size={22} /></div>;
-  }
-
-  const filtered = invoices.filter((i) => !year || (i.date || "").startsWith(year));
-  const deductibleTotal = filtered.filter((i) => i.deduct).reduce((s, i) => s + (i.value || 0), 0);
-  const byCategory = {};
-  for (const i of filtered) {
-    if (!i.deduct) continue;
-    byCategory[i.category || "Outro"] = (byCategory[i.category || "Outro"] || 0) + (i.value || 0);
-  }
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-slate-500">Ano:</label>
-          <select value={year} onChange={(e) => setYear(e.target.value)} className="border border-slate-300 rounded-lg text-sm px-2 py-1.5">
-            {years.length === 0 && <option value="">—</option>}
-            {years.map((y) => <option key={y} value={y}>{y}</option>)}
-          </select>
-        </div>
-        <div className="flex items-center gap-2">
-          <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
-          <button onClick={exportCsv} disabled={!filtered.length} className="flex items-center gap-1.5 border border-slate-300 text-slate-700 text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-40">
-            <Download size={15} /> Exportar CSV
-          </button>
-          <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
-            {uploading ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
-            {uploading ? "Lendo PDF..." : "Enviar nota fiscal"}
-          </button>
-        </div>
-      </div>
-
-      {uploadError && (
-        <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-          <div className="flex-1">{uploadError}</div>
-          {!uploadError.startsWith("Essa nota já") && (
-            <button
-              onClick={() => setReviewData({ date: new Date().toISOString().slice(0, 10), provider: "", doc: "", value: "", description: "", category: "Outro", deduct: true, base64: null })}
-              className="text-xs underline whitespace-nowrap"
-            >
-              Adicionar manualmente
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
-        <div className="bg-slate-50 rounded-xl p-4">
-          <p className="text-xs text-slate-500 mb-1">Total dedutível {year && `em ${year}`}</p>
-          <p className="text-2xl font-medium text-slate-900">{fmtBRL(deductibleTotal)}</p>
-        </div>
-        <div className="bg-slate-50 rounded-xl p-4">
-          <p className="text-xs text-slate-500 mb-1.5">Por categoria</p>
-          <div className="flex flex-wrap gap-1.5">
-            {Object.keys(byCategory).length === 0 && <span className="text-xs text-slate-400">Nenhuma despesa dedutível ainda</span>}
-            {Object.entries(byCategory).map(([cat, v]) => (
-              <span key={cat} className="text-xs bg-white border border-slate-200 rounded-full px-2 py-1 text-slate-600">
-                {cat}: {fmtBRL(v)}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {filtered.length === 0 ? (
-        <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
-          <Receipt size={28} className="mx-auto mb-2" />
-          <p className="text-sm">Nenhuma nota fiscal ainda. Envie o PDF de uma nota, recibo ou fatura de despesa médica/odontológica.</p>
-        </div>
-      ) : (
-        <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
-          {filtered.map((inv) => (
-            <div key={inv.id} className="flex items-center justify-between px-4 py-3 gap-3 flex-wrap">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <Receipt size={15} className="text-slate-400 shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-sm text-slate-800 truncate">{inv.provider || "Prestador não informado"}</p>
-                  <p className="text-xs text-slate-400">{fmtDate(inv.date)} · {inv.category || "Outro"}{!inv.deduct && " · não dedutível"}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 shrink-0">
-                <span className="text-sm text-slate-700 font-medium">{fmtBRL(inv.value)}</span>
-                {inv.hasPdf && (
-                  <a href={api.invoicePdfUrl(profileId, inv.id)} target="_blank" rel="noreferrer" className="text-slate-400 hover:text-slate-700 p-1.5 inline-flex" aria-label="Abrir PDF original">
-                    <FileText size={15} />
-                  </a>
-                )}
-                <button onClick={() => setConfirmDelete(inv)} className="text-slate-300 hover:text-red-500 p-1.5" aria-label="Excluir nota">
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <p className="text-xs text-slate-400 mt-3 flex items-start gap-1.5">
-        <Info size={13} className="mt-0.5 shrink-0" />
-        A classificação de dedutibilidade é gerada automaticamente e pode errar — confirme sempre com um contador antes de declarar.
-      </p>
-
-      {confirmDelete && (
-        <ConfirmModal
-          title="Excluir esta nota?"
-          message="A nota fiscal e os dados extraídos dela serão removidos."
-          confirmLabel="Excluir"
-          onCancel={() => setConfirmDelete(null)}
-          onConfirm={() => { removeInvoice(confirmDelete.id); setConfirmDelete(null); }}
-        />
-      )}
-
-      {reviewData && <ReviewInvoiceModal data={reviewData} onCancel={() => setReviewData(null)} onConfirm={saveInvoiceHandler} />}
-    </div>
-  );
-}
-
-function ReviewInvoiceModal({ data, onCancel, onConfirm }) {
-  const [date, setDate] = useState(data.date || "");
-  const [provider, setProvider] = useState(data.provider || "");
-  const [doc, setDoc] = useState(data.doc || "");
-  const [value, setValue] = useState(data.value ?? "");
-  const [category, setCategory] = useState(data.category || "Outro");
-  const [description, setDescription] = useState(data.description || "");
-  const [deduct, setDeduct] = useState(data.deduct !== false);
-
-  return (
-    <ModalShell onClose={onCancel} title="Confira os dados da nota">
-      <p className="text-xs text-slate-500 mb-3 flex items-center gap-1.5">
-        <ClipboardEdit size={13} /> Revise e corrija antes de salvar — a leitura automática pode errar.
-      </p>
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        <div>
-          <label className="text-xs text-slate-500 mb-1 block">Data</label>
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
-        </div>
-        <div>
-          <label className="text-xs text-slate-500 mb-1 block">Valor (R$)</label>
-          <input type="number" step="0.01" value={value} onChange={(e) => setValue(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
-        </div>
-      </div>
-      <div className="mb-3">
-        <label className="text-xs text-slate-500 mb-1 block">Prestador / estabelecimento</label>
-        <input value={provider} onChange={(e) => setProvider(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
-      </div>
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        <div>
-          <label className="text-xs text-slate-500 mb-1 block">CPF/CNPJ do prestador</label>
-          <input value={doc} onChange={(e) => setDoc(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
-        </div>
-        <div>
-          <label className="text-xs text-slate-500 mb-1 block">Categoria</label>
-          <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
-            {INVOICE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
-      </div>
-      <div className="mb-3">
-        <label className="text-xs text-slate-500 mb-1 block">Descrição</label>
-        <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Opcional" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
-      </div>
-      <label className="flex items-center gap-2 text-sm text-slate-700 mb-4">
-        <input type="checkbox" checked={deduct} onChange={(e) => setDeduct(e.target.checked)} />
-        Dedutível no Imposto de Renda
-      </label>
-      <div className="flex justify-end gap-2">
-        <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
-        <button
-          disabled={!date || value === "" || value === null}
-          onClick={() => onConfirm({ date, provider, doc, value: parseFloat(value) || 0, category, description, deduct, base64: data.base64, fileName: data.fileName, hash: data.hash })}
-          className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
-        >
-          Salvar
-        </button>
-      </div>
-    </ModalShell>
   );
 }

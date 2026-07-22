@@ -8,8 +8,6 @@ const pdfDir = path.join(dataDir, "pdfs");
 if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
 const bodyPhotoDir = path.join(dataDir, "body-photos");
 if (!fs.existsSync(bodyPhotoDir)) fs.mkdirSync(bodyPhotoDir, { recursive: true });
-const invoiceDir = path.join(dataDir, "invoices");
-if (!fs.existsSync(invoiceDir)) fs.mkdirSync(invoiceDir, { recursive: true });
 
 const db = new Database(path.join(dataDir, "db.sqlite"));
 db.pragma("journal_mode = WAL");
@@ -113,22 +111,6 @@ CREATE TABLE IF NOT EXISTS activities (
   created_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS invoices (
-  id TEXT PRIMARY KEY,
-  profile_id TEXT NOT NULL,
-  date TEXT,
-  provider TEXT,
-  doc TEXT,
-  value REAL NOT NULL DEFAULT 0,
-  category TEXT,
-  description TEXT,
-  deduct INTEGER NOT NULL DEFAULT 1,
-  file_hash TEXT,
-  pdf_filename TEXT,
-  has_pdf INTEGER NOT NULL DEFAULT 0,
-  saved_at INTEGER NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS exam_explanations (
   id TEXT PRIMARY KEY,
   profile_id TEXT NOT NULL,
@@ -160,7 +142,6 @@ CREATE INDEX IF NOT EXISTS idx_symptoms_profile ON symptoms(profile_id);
 CREATE INDEX IF NOT EXISTS idx_tips_history_profile ON tips_history(profile_id);
 CREATE INDEX IF NOT EXISTS idx_activities_profile ON activities(profile_id);
 CREATE INDEX IF NOT EXISTS idx_exam_explanations_profile_exam ON exam_explanations(profile_id, exam_name);
-CREATE INDEX IF NOT EXISTS idx_invoices_profile ON invoices(profile_id);
 `);
 
 // Migração leve: bancos criados antes do Strava/Apple Watch só tinham as colunas
@@ -227,4 +208,4 @@ if (!alertsCols.includes("based_on_signature")) {
 }
 
 export default db;
-export { pdfDir, bodyPhotoDir, invoiceDir };
+export { pdfDir, bodyPhotoDir };
