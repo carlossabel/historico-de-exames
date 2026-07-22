@@ -5,14 +5,15 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
-import db, { pdfDir, bodyPhotoDir, invoiceDir } from "./db.js";
+import db, { pdfDir, bodyPhotoDir, invoiceDir, whatsappDir } from "./db.js";
 import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, INVOICE_EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, buildBodyAgePrompt, buildBodyMetricInfoPrompt, BODY_PHOTO_EXTRACTION_PROMPT } from "./anthropic.js";
+import { verifyWebhook, handleWebhook, normalizePhone } from "./whatsapp.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.set("trust proxy", 1); // necessário pra montar a URL de callback do Strava corretamente atrás do proxy do Railway
 app.use(cors());
-app.use(express.json({ limit: "60mb" }));
+app.use(express.json({ limit: "60mb", verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
 
@@ -33,41 +34,61 @@ function parseHereditary(raw) {
 
 app.get("/api/profiles", (req, res) => {
   const rows = db
-    .prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, created_at as createdAt FROM profiles ORDER BY created_at ASC")
+    .prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, pin, created_at as createdAt FROM profiles ORDER BY created_at ASC")
     .all()
-    .map((r) => ({ ...r, hereditaryConditions: parseHereditary(r.hereditaryConditions) }));
+    .map((r) => {
+      const { pin, ...rest } = r;
+      return { ...rest, hereditaryConditions: parseHereditary(r.hereditaryConditions), hasPin: !!pin };
+    });
   res.json(rows);
 });
 
+function validatePin(pin) {
+  if (pin === undefined) return { ok: true, skip: true };
+  if (pin === null || pin === "") return { ok: true, value: null };
+  if (!/^\d{4}$/.test(String(pin))) return { ok: false };
+  return { ok: true, value: String(pin) };
+}
+
 app.post("/api/profiles", (req, res) => {
-  const { name, birthDate, gender, heightCm, whatsapp, hereditaryConditions } = req.body || {};
+  const { name, birthDate, gender, heightCm, whatsapp, hereditaryConditions, pin } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: "Nome obrigatório" });
+  const pinCheck = validatePin(pin);
+  if (!pinCheck.ok) return res.status(400).json({ error: "A senha precisa ter exatamente 4 números." });
   const count = db.prepare("SELECT COUNT(*) as c FROM profiles").get().c;
   const id = uid();
   const colorIdx = count % 8;
   const createdAt = Date.now();
   const hereditaryJson = JSON.stringify(Array.isArray(hereditaryConditions) ? hereditaryConditions : []);
-  db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, whatsapp, hereditary_conditions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-    id, name.trim(), colorIdx, birthDate || null, gender || null, numOrNull(heightCm), whatsapp || null, hereditaryJson, createdAt
+  const whatsappNormalized = whatsapp ? normalizePhone(whatsapp) : null;
+  const pinValue = pinCheck.skip ? null : pinCheck.value;
+  db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, whatsapp, hereditary_conditions, pin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+    id, name.trim(), colorIdx, birthDate || null, gender || null, numOrNull(heightCm), whatsappNormalized, hereditaryJson, pinValue, createdAt
   );
   res.json({
     id, name: name.trim(), colorIdx, birthDate: birthDate || null, gender: gender || null, heightCm: numOrNull(heightCm),
-    whatsapp: whatsapp || null, hereditaryConditions: Array.isArray(hereditaryConditions) ? hereditaryConditions : [], createdAt,
+    whatsapp: whatsappNormalized, hereditaryConditions: Array.isArray(hereditaryConditions) ? hereditaryConditions : [],
+    hasPin: !!pinValue, createdAt,
   });
 });
 
 app.put("/api/profiles/:id", (req, res) => {
   const { id } = req.params;
-  const existing = db.prepare("SELECT id FROM profiles WHERE id = ?").get(id);
+  const existing = db.prepare("SELECT id, pin FROM profiles WHERE id = ?").get(id);
   if (!existing) return res.status(404).json({ error: "Perfil não encontrado" });
-  const { name, birthDate, gender, heightCm, whatsapp, hereditaryConditions } = req.body || {};
+  const { name, birthDate, gender, heightCm, whatsapp, hereditaryConditions, pin } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: "Nome obrigatório" });
+  const pinCheck = validatePin(pin);
+  if (!pinCheck.ok) return res.status(400).json({ error: "A senha precisa ter exatamente 4 números." });
   const hereditaryJson = JSON.stringify(Array.isArray(hereditaryConditions) ? hereditaryConditions : []);
-  db.prepare("UPDATE profiles SET name = ?, birth_date = ?, gender = ?, height_cm = ?, whatsapp = ?, hereditary_conditions = ? WHERE id = ?").run(
-    name.trim(), birthDate || null, gender || null, numOrNull(heightCm), whatsapp || null, hereditaryJson, id
+  const whatsappNormalized = whatsapp ? normalizePhone(whatsapp) : null;
+  const pinValue = pinCheck.skip ? existing.pin : pinCheck.value;
+  db.prepare("UPDATE profiles SET name = ?, birth_date = ?, gender = ?, height_cm = ?, whatsapp = ?, hereditary_conditions = ?, pin = ? WHERE id = ?").run(
+    name.trim(), birthDate || null, gender || null, numOrNull(heightCm), whatsappNormalized, hereditaryJson, pinValue, id
   );
-  const row = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, created_at as createdAt FROM profiles WHERE id = ?").get(id);
-  res.json({ ...row, hereditaryConditions: parseHereditary(row.hereditaryConditions) });
+  const row = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, pin, created_at as createdAt FROM profiles WHERE id = ?").get(id);
+  const { pin: _pin, ...rest } = row;
+  res.json({ ...rest, hereditaryConditions: parseHereditary(row.hereditaryConditions), hasPin: !!_pin });
 });
 
 app.delete("/api/profiles/:id", (req, res) => {
@@ -97,6 +118,15 @@ app.delete("/api/profiles/:id", (req, res) => {
     if (fs.existsSync(invoicePath)) fs.unlinkSync(invoicePath);
   }
   db.prepare("DELETE FROM invoices WHERE profile_id = ?").run(id);
+  const waUploadRows = db.prepare("SELECT id, extracted_json FROM whatsapp_uploads WHERE profile_id = ?").all(id);
+  for (const u of waUploadRows) {
+    let ext = "pdf";
+    try { ext = JSON.parse(u.extracted_json)?._ext || "pdf"; } catch (e) {}
+    const filePath = path.join(whatsappDir, `${u.id}.${ext}`);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  }
+  db.prepare("DELETE FROM whatsapp_uploads WHERE profile_id = ?").run(id);
+  db.prepare("UPDATE whatsapp_sessions SET profile_id = NULL WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM profiles WHERE id = ?").run(id);
   res.json({ ok: true });
 });
@@ -1167,12 +1197,70 @@ app.delete("/api/profiles/:profileId/invoices/:invoiceId", (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- WhatsApp: webhook ----------
+app.get("/api/whatsapp/webhook", verifyWebhook);
+app.post("/api/whatsapp/webhook", handleWebhook);
+
+// ---------- WhatsApp: fila de pendências (arquivos recebidos, aguardando revisão) ----------
+function previewFromExtracted(kind, extracted) {
+  if (kind === "exame") {
+    return { date: extracted?.d || null, lab: extracted?.l || null, count: Array.isArray(extracted?.e) ? extracted.e.length : 0 };
+  }
+  return { date: extracted?.d || null, provider: extracted?.prov || null, value: extracted?.v ?? null };
+}
+
+app.get("/api/profiles/:profileId/whatsapp-uploads", (req, res) => {
+  const rows = db
+    .prepare("SELECT id, kind, extracted_json, received_at as receivedAt FROM whatsapp_uploads WHERE profile_id = ? ORDER BY received_at DESC")
+    .all(req.params.profileId);
+  res.json(
+    rows.map((r) => {
+      let extracted = {};
+      try { extracted = JSON.parse(r.extracted_json); } catch (e) {}
+      return { id: r.id, kind: r.kind, receivedAt: r.receivedAt, preview: previewFromExtracted(r.kind, extracted) };
+    })
+  );
+});
+
+app.get("/api/profiles/:profileId/whatsapp-uploads/:uploadId", (req, res) => {
+  const row = db.prepare("SELECT * FROM whatsapp_uploads WHERE id = ? AND profile_id = ?").get(req.params.uploadId, req.params.profileId);
+  if (!row) return res.status(404).json({ error: "Não encontrado" });
+  let extracted = {};
+  try { extracted = JSON.parse(row.extracted_json); } catch (e) {}
+  const ext = extracted._ext || "pdf";
+  const filePath = path.join(whatsappDir, `${row.id}.${ext}`);
+  let base64 = null;
+  if (fs.existsSync(filePath)) base64 = fs.readFileSync(filePath).toString("base64");
+  const { _ext, ...cleanExtracted } = extracted;
+  res.json({
+    id: row.id,
+    kind: row.kind,
+    extracted: cleanExtracted,
+    base64,
+    fileName: row.pdf_filename,
+    hash: row.file_hash,
+    isPdf: ext === "pdf",
+  });
+});
+
+app.delete("/api/profiles/:profileId/whatsapp-uploads/:uploadId", (req, res) => {
+  const row = db.prepare("SELECT extracted_json FROM whatsapp_uploads WHERE id = ? AND profile_id = ?").get(req.params.uploadId, req.params.profileId);
+  if (row) {
+    let ext = "pdf";
+    try { ext = JSON.parse(row.extracted_json)?._ext || "pdf"; } catch (e) {}
+    const filePath = path.join(whatsappDir, `${req.params.uploadId}.${ext}`);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  }
+  db.prepare("DELETE FROM whatsapp_uploads WHERE id = ? AND profile_id = ?").run(req.params.uploadId, req.params.profileId);
+  res.json({ ok: true });
+});
+
 // ---------- Export backup ----------
 app.get("/api/export", (req, res) => {
   try {
-    const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, created_at as createdAt FROM profiles").all()
+    const profiles = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, pin, created_at as createdAt FROM profiles").all()
       .map((p) => ({ ...p, hereditaryConditions: parseHereditary(p.hereditaryConditions) }));
-    const backup = { version: 8, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {}, invoices: {} };
+    const backup = { version: 9, exportedAt: new Date().toISOString(), profiles, batches: {}, bodyEntries: {}, symptoms: {}, activities: {}, invoices: {} };
     for (const p of profiles) {
       const invoiceRows = db
         .prepare("SELECT * FROM invoices WHERE profile_id = ? ORDER BY date ASC, saved_at ASC")
@@ -1253,15 +1341,16 @@ app.post("/api/import", (req, res) => {
         profileId = uid(); // avoid id collision with existing data
       }
       const count = db.prepare("SELECT COUNT(*) as c FROM profiles").get().c;
-      db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, whatsapp, hereditary_conditions, created_at) VALUES (?,?,?,?,?,?,?,?,?)").run(
+      db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, whatsapp, hereditary_conditions, pin, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)").run(
         profileId,
         p.name || "Sem nome",
         typeof p.colorIdx === "number" ? p.colorIdx : count % 8,
         p.birthDate || null,
         p.gender || null,
         numOrNull(p.heightCm),
-        p.whatsapp || null,
+        p.whatsapp ? normalizePhone(p.whatsapp) : null,
         JSON.stringify(Array.isArray(p.hereditaryConditions) ? p.hereditaryConditions : []),
+        /^\d{4}$/.test(String(p.pin || "")) ? String(p.pin) : null,
         p.createdAt || Date.now()
       );
       importedProfiles++;

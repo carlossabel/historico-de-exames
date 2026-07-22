@@ -119,6 +119,17 @@ Regras:
 - Nao invente valores. Se um campo nao existir, use string vazia.
 - Responda em portugues.`;
 
+export const CLASSIFY_DOCUMENT_PROMPT = `Você recebe um documento (PDF ou foto) enviado por uma pessoa pelo WhatsApp para um app de histórico de saúde e notas fiscais. Classifique o tipo de documento. Responda APENAS com JSON válido, sem markdown, sem comentários, sem texto antes ou depois, em um destes três formatos exatos:
+{"tipo":"exame"}
+{"tipo":"nota_fiscal"}
+{"tipo":"outro"}
+
+Regras:
+- "exame": laudo ou resultado de exame laboratorial ou de imagem (sangue, urina, ultrassom, raio-x, ressonância, etc).
+- "nota_fiscal": nota fiscal, NFS-e, recibo de profissional liberal, ou fatura de plano de saúde/despesa médica-odontológica.
+- "outro": qualquer outra coisa (foto pessoal, documento não relacionado, ilegível, propaganda, etc).
+Responda somente com o JSON, nada mais.`;
+
 export const INVOICE_EXTRACTION_PROMPT = `Você é um assistente que lê notas fiscais, recibos e faturas de despesas médicas/odontológicas em PDF (nota fiscal de produto, NFS-e de serviço de qualquer prefeitura, recibo de profissional liberal, fatura de plano de saúde) e extrai os dados relevantes para a declaração de Imposto de Renda no Brasil. Responda APENAS com JSON válido, sem markdown, sem comentários, sem texto antes ou depois.
 
 Formato exato:

@@ -4,14 +4,14 @@ import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
   FileUp, Download, Weight, Pencil, Stethoscope, Dumbbell, Camera, Watch, Link, Copy, RefreshCw,
-  Footprints, PersonStanding, Bike, Waves, Mountain, CircleDot, Music, Zap, Flame, Receipt,
+  Footprints, PersonStanding, Bike, Waves, Mountain, CircleDot, Music, Zap, Flame, Receipt, MessageCircle,
 } from "lucide-react";
 import * as api from "./api.js";
 
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-22f · Cards de exames que melhoraram/pioraram no Painel agora abrem a aba Exames já filtrada pelos exames do card";
+const APP_BUILD = "2026-07-22g · Recebe exames e notas fiscais pelo WhatsApp (número único + senha de 4 dígitos no perfil), com fila de revisão antes de salvar";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -551,15 +551,18 @@ function AddProfileModal({ onClose, onConfirm }) {
   const [gender, setGender] = useState("");
   const [heightCm, setHeightCm] = useState("");
   const [whatsapp, setWhatsapp] = useState("");
+  const [pin, setPin] = useState("");
   const [hereditaryConditions, setHereditaryConditions] = useState([]);
 
   const toggleCondition = (c) => {
     setHereditaryConditions((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
   };
 
+  const pinInvalid = pin.length > 0 && !/^\d{4}$/.test(pin);
+
   const confirm = () => {
-    if (!name.trim()) return;
-    onConfirm(name.trim(), { birthDate: birthDate || null, gender: gender || null, heightCm: heightCm || null, whatsapp: whatsapp || null, hereditaryConditions });
+    if (!name.trim() || pinInvalid) return;
+    onConfirm(name.trim(), { birthDate: birthDate || null, gender: gender || null, heightCm: heightCm || null, whatsapp: whatsapp || null, pin: pin || null, hereditaryConditions });
   };
 
   return (
@@ -607,14 +610,33 @@ function AddProfileModal({ onClose, onConfirm }) {
         Tudo opcional — altura é usada para o IMC, e sexo pra classificar a faixa ideal de gordura corporal na aba Saúde física. Pode preencher depois também.
       </p>
 
-      <label className="text-xs text-slate-500 mb-1 block">WhatsApp</label>
-      <input
-        type="tel"
-        value={whatsapp}
-        onChange={(e) => setWhatsapp(e.target.value)}
-        placeholder="Ex: (11) 91234-5678"
-        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-300"
-      />
+      <div className="grid grid-cols-2 gap-3 mb-1">
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">WhatsApp</label>
+          <input
+            type="tel"
+            value={whatsapp}
+            onChange={(e) => setWhatsapp(e.target.value)}
+            placeholder="Ex: (11) 91234-5678"
+            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Senha de 4 dígitos</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            maxLength={4}
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            placeholder="Ex: 1234"
+            className={`w-full border rounded-lg px-2.5 py-1.5 text-sm ${pinInvalid ? "border-red-400" : "border-slate-300"}`}
+          />
+        </div>
+      </div>
+      <p className="text-xs text-slate-400 mb-4">
+        WhatsApp e senha são usados juntos pra enviar exames e notas fiscais pelo número único do app pelo WhatsApp — envie uma mensagem pra ele que ele confirma sua identidade com essas duas informações.
+      </p>
 
       <label className="text-xs text-slate-500 mb-1.5 block">Problemas de saúde hereditários (histórico familiar)</label>
       <div className="flex flex-wrap gap-1.5 mb-4">
@@ -636,7 +658,7 @@ function AddProfileModal({ onClose, onConfirm }) {
 
       <div className="flex justify-end gap-2">
         <button onClick={onClose} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
-        <button disabled={!name.trim()} onClick={confirm} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800">
+        <button disabled={!name.trim() || pinInvalid} onClick={confirm} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800">
           Criar perfil
         </button>
       </div>
@@ -650,6 +672,7 @@ function EditProfileModal({ profile, onClose, onSave }) {
   const [gender, setGender] = useState(profile.gender || "");
   const [heightCm, setHeightCm] = useState(profile.heightCm ?? "");
   const [whatsapp, setWhatsapp] = useState(profile.whatsapp || "");
+  const [pin, setPin] = useState("");
   const [hereditaryConditions, setHereditaryConditions] = useState(Array.isArray(profile.hereditaryConditions) ? profile.hereditaryConditions : []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -658,12 +681,18 @@ function EditProfileModal({ profile, onClose, onSave }) {
     setHereditaryConditions((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
   };
 
+  const pinInvalid = pin.length > 0 && !/^\d{4}$/.test(pin);
+
   const handleSave = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || pinInvalid) return;
     setSaving(true);
     setError(null);
     try {
-      await onSave({ name: name.trim(), birthDate: birthDate || null, gender: gender || null, heightCm: heightCm || null, whatsapp: whatsapp || null, hereditaryConditions });
+      // Se o campo de senha ficou em branco, não manda "pin" no payload — o backend entende
+      // isso como "não mexer na senha já cadastrada". Só manda se a pessoa digitou algo novo.
+      const payload = { name: name.trim(), birthDate: birthDate || null, gender: gender || null, heightCm: heightCm || null, whatsapp: whatsapp || null, hereditaryConditions };
+      if (pin) payload.pin = pin;
+      await onSave(payload);
     } catch (e) {
       setError(e.message || "Erro ao salvar perfil.");
     } finally {
@@ -714,14 +743,35 @@ function EditProfileModal({ profile, onClose, onSave }) {
         Altura é usada para calcular o IMC. Sexo é usado para classificar a faixa ideal de gordura corporal na aba Saúde física — nada aqui é obrigatório.
       </p>
 
-      <label className="text-xs text-slate-500 mb-1 block">WhatsApp</label>
-      <input
-        type="tel"
-        value={whatsapp}
-        onChange={(e) => setWhatsapp(e.target.value)}
-        placeholder="Ex: (11) 91234-5678"
-        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-300"
-      />
+      <div className="grid grid-cols-2 gap-3 mb-1">
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">WhatsApp</label>
+          <input
+            type="tel"
+            value={whatsapp}
+            onChange={(e) => setWhatsapp(e.target.value)}
+            placeholder="Ex: (11) 91234-5678"
+            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Senha de 4 dígitos</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            maxLength={4}
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            placeholder={profile.hasPin ? "•••• (definida)" : "Ex: 1234"}
+            className={`w-full border rounded-lg px-2.5 py-1.5 text-sm ${pinInvalid ? "border-red-400" : "border-slate-300"}`}
+          />
+        </div>
+      </div>
+      <p className="text-xs text-slate-400 mb-4">
+        {profile.hasPin
+          ? "Já existe uma senha cadastrada — deixe em branco pra mantê-la, ou digite 4 números novos pra trocar."
+          : "WhatsApp e senha são usados juntos pra enviar exames e notas fiscais pelo número único do app pelo WhatsApp."}
+      </p>
 
       <label className="text-xs text-slate-500 mb-1.5 block">Problemas de saúde hereditários (histórico familiar)</label>
       <div className="flex flex-wrap gap-1.5 mb-4">
@@ -749,7 +799,7 @@ function EditProfileModal({ profile, onClose, onSave }) {
       <div className="flex justify-end gap-2">
         <button onClick={onClose} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
         <button
-          disabled={!name.trim() || saving}
+          disabled={!name.trim() || saving || pinInvalid}
           onClick={handleSave}
           className="flex items-center gap-1.5 text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
         >
@@ -871,6 +921,10 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
   const [tab, setTab] = useState(initialTab || "painel");
   const [examNameFilter, setExamNameFilter] = useState(null); // { examNames: [...], label: "..." } | null
   const [editProfileOpen, setEditProfileOpen] = useState(false);
+  const [waUploads, setWaUploads] = useState([]);
+  const [waInboxOpen, setWaInboxOpen] = useState(false);
+  const [reviewFromWaId, setReviewFromWaId] = useState(null); // id pendente sendo revisado (exame)
+  const [pendingInvoiceReview, setPendingInvoiceReview] = useState(null); // { data, uploadId } pra Notas fiscais
   const fileInputRef = useRef(null);
 
   // Troca de aba "normal" (clique direto na aba): sempre limpa o filtro de exames
@@ -897,6 +951,63 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
   }, [profile.id]);
 
   useEffect(() => { load(); }, [load]);
+
+  const loadWaUploads = useCallback(async () => {
+    try {
+      setWaUploads(await api.getWhatsappUploads(profile.id));
+    } catch (e) {
+      setWaUploads([]);
+    }
+  }, [profile.id]);
+
+  useEffect(() => { loadWaUploads(); }, [loadWaUploads]);
+
+  const reviewWaExam = async (uploadId) => {
+    const detail = await api.getWhatsappUpload(profile.id, uploadId);
+    const extracted = detail.extracted || {};
+    const results = (extracted.e || []).map((r) => ({
+      id: uid(), name: r.n || "", value: r.v ?? "", unit: r.u || "", ref: r.r || "",
+      status: ["N", "A", "F"].includes(r.s) ? r.s : "N", category: r.c || "Outro",
+    }));
+    setReviewData({
+      date: extracted.d || new Date().toISOString().slice(0, 10),
+      lab: extracted.l || "",
+      doctor: extracted.m || "",
+      results,
+      base64: detail.base64,
+      fileName: detail.fileName,
+      hash: detail.hash,
+    });
+    setReviewFromWaId(uploadId);
+    goToTab("exames");
+    setWaInboxOpen(false);
+  };
+
+  const reviewWaInvoice = async (uploadId) => {
+    const detail = await api.getWhatsappUpload(profile.id, uploadId);
+    const extracted = detail.extracted || {};
+    setPendingInvoiceReview({
+      data: {
+        date: extracted.d || new Date().toISOString().slice(0, 10),
+        provider: extracted.prov || "",
+        doc: extracted.doc || "",
+        value: extracted.v ?? "",
+        description: extracted.desc || "",
+        category: extracted.cat || "Outro",
+        base64: detail.base64,
+        fileName: detail.fileName,
+        hash: detail.hash,
+      },
+      uploadId,
+    });
+    goToTab("notas");
+    setWaInboxOpen(false);
+  };
+
+  const discardWaUpload = async (uploadId) => {
+    await api.deleteWhatsappUpload(profile.id, uploadId);
+    loadWaUploads();
+  };
 
   const saveProfileEdit = async (payload) => {
     const updated = await api.updateProfile(profile.id, payload);
@@ -944,6 +1055,11 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
     setIndex((prev) => [...(prev || []), newIndexEntry].sort((a, b) => (b.date || "").localeCompare(a.date || "")));
     setBatches((prev) => ({ ...prev, [batchId]: { date: data.date, lab: data.lab, doctor: data.doctor, results: data.results } }));
     setReviewData(null);
+    if (reviewFromWaId) {
+      await api.deleteWhatsappUpload(profile.id, reviewFromWaId);
+      setReviewFromWaId(null);
+      loadWaUploads();
+    }
   };
 
   const removeBatch = async (batchId) => {
@@ -1045,6 +1161,19 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
         </button>
       </div>
 
+      {waUploads.length > 0 && (
+        <button
+          onClick={() => setWaInboxOpen(true)}
+          className="w-full flex items-center justify-between gap-3 bg-emerald-50 hover:bg-emerald-100 transition border border-emerald-200 rounded-xl px-4 py-3 mb-5"
+        >
+          <span className="flex items-center gap-2 text-sm text-emerald-800">
+            <MessageCircle size={15} />
+            {waUploads.length} {waUploads.length === 1 ? "item recebido" : "itens recebidos"} pelo WhatsApp — aguardando revisão
+          </span>
+          <ChevronRight size={16} className="text-emerald-600 shrink-0" />
+        </button>
+      )}
+
       {tab === "painel" && (
         <DashboardScreen
           profileId={profile.id}
@@ -1060,7 +1189,14 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
 
       {tab === "atividades" && <ActivitiesScreen profileId={profile.id} />}
 
-      {tab === "notas" && <InvoicesPanel profileId={profile.id} />}
+      {tab === "notas" && (
+        <InvoicesPanel
+          profileId={profile.id}
+          pendingReview={pendingInvoiceReview}
+          onConsumePendingReview={() => setPendingInvoiceReview(null)}
+          onWaUploadResolved={loadWaUploads}
+        />
+      )}
 
       {tab === "exames" && (
       <>
@@ -1105,12 +1241,73 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
 
       {selectedExam && <ExamEvolutionModal examName={selectedExam} orderedBatchIds={orderedBatchIds} batches={batches} profileId={profile.id} onClose={() => setSelectedExam(null)} />}
 
-      {reviewData && <ReviewModal data={reviewData} onCancel={() => setReviewData(null)} onConfirm={saveBatch} />}
+      {reviewData && <ReviewModal data={reviewData} onCancel={() => { setReviewData(null); setReviewFromWaId(null); }} onConfirm={saveBatch} />}
       </>
       )}
 
       {editProfileOpen && <EditProfileModal profile={profile} onClose={() => setEditProfileOpen(false)} onSave={saveProfileEdit} />}
+
+      {waInboxOpen && (
+        <WhatsAppInboxModal
+          uploads={waUploads}
+          onClose={() => setWaInboxOpen(false)}
+          onReviewExam={reviewWaExam}
+          onReviewInvoice={reviewWaInvoice}
+          onDiscard={discardWaUpload}
+        />
+      )}
     </div>
+  );
+}
+
+function WhatsAppInboxModal({ uploads, onClose, onReviewExam, onReviewInvoice, onDiscard }) {
+  const [confirmDiscard, setConfirmDiscard] = useState(null);
+
+  return (
+    <ModalShell onClose={onClose} title="Recebidos pelo WhatsApp" wide>
+      {uploads.length === 0 ? (
+        <p className="text-sm text-slate-400 py-8 text-center">Nenhum item pendente.</p>
+      ) : (
+        <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
+          {uploads.map((u) => (
+            <div key={u.id} className="flex items-center justify-between px-3 py-2.5 gap-2 flex-wrap">
+              <div className="flex items-center gap-2.5 min-w-0">
+                {u.kind === "exame" ? <FileText size={15} className="text-slate-400 shrink-0" /> : <Receipt size={15} className="text-slate-400 shrink-0" />}
+                <div className="min-w-0">
+                  <p className="text-sm text-slate-800 truncate">
+                    {u.kind === "exame"
+                      ? `Exame · ${fmtDate(u.preview.date) || "data não identificada"} · ${u.preview.count} resultado${u.preview.count === 1 ? "" : "s"}`
+                      : `Nota fiscal/recibo · ${u.preview.provider || "prestador não informado"}`}
+                  </p>
+                  <p className="text-xs text-slate-400">Recebido em {fmtDate(new Date(u.receivedAt).toISOString().slice(0, 10))}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => (u.kind === "exame" ? onReviewExam(u.id) : onReviewInvoice(u.id))}
+                  className="text-xs bg-slate-900 text-white px-2.5 py-1.5 rounded-lg hover:bg-slate-800"
+                >
+                  Revisar
+                </button>
+                <button onClick={() => setConfirmDiscard(u)} className="text-slate-300 hover:text-red-500 p-1.5" aria-label="Descartar">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {confirmDiscard && (
+        <ConfirmModal
+          title="Descartar este item?"
+          message="O arquivo recebido pelo WhatsApp será removido sem salvar no histórico."
+          confirmLabel="Descartar"
+          onCancel={() => setConfirmDiscard(null)}
+          onConfirm={() => { onDiscard(confirmDiscard.id); setConfirmDiscard(null); }}
+        />
+      )}
+    </ModalShell>
   );
 }
 
@@ -2950,12 +3147,13 @@ function DashboardScreen({ profileId, profileName, profile, onGoTo }) {
 
 // ---------- Invoices (Notas fiscais / IR) ----------
 
-function InvoicesPanel({ profileId }) {
+function InvoicesPanel({ profileId, pendingReview, onConsumePendingReview, onWaUploadResolved }) {
   const [invoices, setInvoices] = useState(null);
   const [year, setYear] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
   const [reviewData, setReviewData] = useState(null);
+  const [reviewFromWaId, setReviewFromWaId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -2965,6 +3163,16 @@ function InvoicesPanel({ profileId }) {
   }, [profileId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Chega aqui quando o usuário clica "Revisar" numa nota fiscal recebida pelo WhatsApp
+  // (fila de pendências, controlada pela ProfileScreen).
+  useEffect(() => {
+    if (pendingReview) {
+      setReviewData(pendingReview.data);
+      setReviewFromWaId(pendingReview.uploadId);
+      onConsumePendingReview();
+    }
+  }, [pendingReview, onConsumePendingReview]);
 
   const years = useMemo(
     () => [...new Set((invoices || []).map((i) => (i.date || "").slice(0, 4)).filter(Boolean))].sort().reverse(),
@@ -3012,6 +3220,11 @@ function InvoicesPanel({ profileId }) {
       const saved = await api.saveInvoice(profileId, data);
       setInvoices((prev) => [saved, ...(prev || [])].sort((a, b) => (b.date || "").localeCompare(a.date || "")));
       setReviewData(null);
+      if (reviewFromWaId) {
+        await api.deleteWhatsappUpload(profileId, reviewFromWaId);
+        setReviewFromWaId(null);
+        if (onWaUploadResolved) onWaUploadResolved();
+      }
     } catch (e) {
       if (e.duplicate) {
         setUploadError(`Essa nota já está salva (${fmtDate(e.dupInfo.date)}, ${e.dupInfo.provider || "prestador não informado"}). Não vou salvar de novo para não duplicar.`);
@@ -3141,7 +3354,7 @@ function InvoicesPanel({ profileId }) {
         />
       )}
 
-      {reviewData && <ReviewInvoiceModal data={reviewData} onCancel={() => setReviewData(null)} onConfirm={saveInvoiceHandler} />}
+      {reviewData && <ReviewInvoiceModal data={reviewData} onCancel={() => { setReviewData(null); setReviewFromWaId(null); }} onConfirm={saveInvoiceHandler} />}
     </div>
   );
 }

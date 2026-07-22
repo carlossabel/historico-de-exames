@@ -351,3 +351,20 @@ export async function deleteInvoice(profileId, invoiceId) {
 export function invoicePdfUrl(profileId, invoiceId) {
   return `/api/profiles/${profileId}/invoices/${invoiceId}/pdf`;
 }
+
+// ---------- WhatsApp: fila de pendências ----------
+
+export async function getWhatsappUploads(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/whatsapp-uploads`);
+  return r.json();
+}
+
+export async function getWhatsappUpload(profileId, uploadId) {
+  const r = await fetch(`/api/profiles/${profileId}/whatsapp-uploads/${uploadId}`);
+  if (!r.ok) throw new Error("Não consegui carregar esse item.");
+  return r.json();
+}
+
+export async function deleteWhatsappUpload(profileId, uploadId) {
+  await fetch(`/api/profiles/${profileId}/whatsapp-uploads/${uploadId}`, { method: "DELETE" });
+}

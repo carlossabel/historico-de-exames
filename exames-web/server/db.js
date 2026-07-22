@@ -10,6 +10,8 @@ const bodyPhotoDir = path.join(dataDir, "body-photos");
 if (!fs.existsSync(bodyPhotoDir)) fs.mkdirSync(bodyPhotoDir, { recursive: true });
 const invoiceDir = path.join(dataDir, "invoices");
 if (!fs.existsSync(invoiceDir)) fs.mkdirSync(invoiceDir, { recursive: true });
+const whatsappDir = path.join(dataDir, "whatsapp-uploads");
+if (!fs.existsSync(whatsappDir)) fs.mkdirSync(whatsappDir, { recursive: true });
 
 const db = new Database(path.join(dataDir, "db.sqlite"));
 db.pragma("journal_mode = WAL");
@@ -24,6 +26,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   height_cm REAL,
   whatsapp TEXT,
   hereditary_conditions TEXT,
+  pin TEXT,
   created_at INTEGER NOT NULL
 );
 
@@ -131,6 +134,31 @@ CREATE TABLE IF NOT EXISTS invoices (
   saved_at INTEGER NOT NULL
 );
 
+-- Estado da conversa do WhatsApp por número de telefone (fluxo: saudação -> nome -> senha -> autenticado).
+CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+  phone TEXT PRIMARY KEY,
+  state TEXT NOT NULL DEFAULT 'greeting',
+  candidate_name TEXT,
+  profile_id TEXT,
+  failed_pin_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until INTEGER,
+  updated_at INTEGER NOT NULL
+);
+
+-- Arquivos recebidos pelo WhatsApp, aguardando revisão do usuário no app antes de virar
+-- um laudo de exame ou nota fiscal de verdade (mesma tela de revisão do upload manual).
+CREATE TABLE IF NOT EXISTS whatsapp_uploads (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL,
+  kind TEXT NOT NULL, -- 'exame' | 'nota_fiscal'
+  extracted_json TEXT NOT NULL,
+  file_hash TEXT,
+  pdf_filename TEXT,
+  has_pdf INTEGER NOT NULL DEFAULT 0,
+  from_phone TEXT,
+  received_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS exam_explanations (
   id TEXT PRIMARY KEY,
   profile_id TEXT NOT NULL,
@@ -163,6 +191,7 @@ CREATE INDEX IF NOT EXISTS idx_tips_history_profile ON tips_history(profile_id);
 CREATE INDEX IF NOT EXISTS idx_activities_profile ON activities(profile_id);
 CREATE INDEX IF NOT EXISTS idx_exam_explanations_profile_exam ON exam_explanations(profile_id, exam_name);
 CREATE INDEX IF NOT EXISTS idx_invoices_profile ON invoices(profile_id);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_uploads_profile ON whatsapp_uploads(profile_id);
 `);
 
 // Migração leve: bancos criados antes do Strava/Apple Watch só tinham as colunas
@@ -225,6 +254,9 @@ if (!profilesCols.includes("whatsapp")) {
 if (!profilesCols.includes("hereditary_conditions")) {
   db.exec("ALTER TABLE profiles ADD COLUMN hereditary_conditions TEXT");
 }
+if (!profilesCols.includes("pin")) {
+  db.exec("ALTER TABLE profiles ADD COLUMN pin TEXT");
+}
 
 // Migração leve: bancos criados antes dos sintomas/composição corporal só tinham
 // based_on_batch_id na tabela alerts. Adiciona a coluna de assinatura combinada
@@ -235,4 +267,4 @@ if (!alertsCols.includes("based_on_signature")) {
 }
 
 export default db;
-export { pdfDir, bodyPhotoDir, invoiceDir };
+export { pdfDir, bodyPhotoDir, invoiceDir, whatsappDir };

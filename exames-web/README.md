@@ -136,7 +136,74 @@ qualquer pessoa com a URL do seu site consegue usá-la para inserir dados no
 seu banco. Isso é consistente com o restante do app (que também não tem
 login), mas vale saber antes de divulgar o link amplamente.
 
-## Avisos importantes
+## Enviar exames e notas fiscais pelo WhatsApp
+
+O app pode receber PDFs e fotos direto pelo WhatsApp, por um único número
+compartilhado por todos os perfis. A pessoa manda a mensagem, o assistente
+confirma quem ela é (nome + senha de 4 dígitos cadastrada no perfil) e depois
+aceita os arquivos — que caem numa fila de pendências dentro do app pra você
+revisar e confirmar antes de salvar (nada é salvo sem essa revisão).
+
+### Como funciona a conversa
+
+1. Pessoa manda qualquer mensagem pro número → assistente responde com
+   "Bom dia/Boa tarde/Boa noite" e pergunta o nome.
+2. Pessoa manda o nome → assistente pede a senha de 4 dígitos.
+3. Pessoa manda a senha certa (tem que bater com o número de WhatsApp **e**
+   a senha cadastrados em algum perfil) → liberado.
+4. A partir daí, todo PDF ou foto enviado é lido pela IA, classificado como
+   exame ou nota fiscal/recibo, e entra na fila de pendências daquele perfil
+   — visível como um banner verde no topo do perfil, dentro do app.
+5. Depois de 1h sem novas mensagens, ou se errar a senha 5 vezes seguidas
+   (bloqueia por 15 min), precisa se identificar de novo.
+
+Cadastre o WhatsApp e a senha de cada pessoa em **editar perfil**, dentro do
+app.
+
+### Configurando o número (Meta WhatsApp Cloud API)
+
+Recomendado porque é oficial da Meta e gratuito para esse volume de uso
+(pessoal/familiar). Passo a passo:
+
+1. Crie uma conta em [developers.facebook.com](https://developers.facebook.com)
+   e um **App** do tipo "Business".
+2. Dentro do app, adicione o produto **WhatsApp**. A Meta já libera um
+   número de teste gratuito na hora — dá pra usar sem verificação de
+   empresa, mas só envia mensagem pra números que você adicionar como
+   "destinatário de teste" no painel (até 5 números, o suficiente pra uso
+   familiar). Pra tirar esse limite depois, é só verificar a conta comercial
+   (gratuito também, só dá mais trabalho de documentação).
+3. Em **WhatsApp → Configuração da API**, anote:
+   - **Temporary access token** (ou gere um permanente em **Configurações do
+     sistema → Usuários do sistema**, assim não expira em 24h).
+   - **Phone number ID**.
+4. Nas variáveis de ambiente da hospedagem (Railway → Variables), adicione:
+   - `WHATSAPP_PHONE_NUMBER_ID` = o Phone number ID do passo 3.
+   - `WHATSAPP_ACCESS_TOKEN` = o token do passo 3.
+   - `WHATSAPP_VERIFY_TOKEN` = qualquer texto secreto inventado por você
+     (usado só na configuração do webhook, passo 6).
+   - `WHATSAPP_APP_SECRET` = o "App Secret" do app (em **Configurações do
+     app → Básico**). Opcional, mas recomendado — sem ele o app não valida
+     se o webhook realmente veio da Meta.
+5. Redeploy o app pra essas variáveis entrarem em vigor.
+6. De volta no painel da Meta, em **WhatsApp → Configuração**, configure o
+   **Webhook**:
+   - **Callback URL**: `https://SEU-DOMINIO/api/whatsapp/webhook`
+   - **Verify token**: o mesmo valor de `WHATSAPP_VERIFY_TOKEN`.
+   - Clique em **Verificar e salvar**. Se dar erro, confira se o deploy com
+     as variáveis novas já terminou.
+   - Em **Campos do webhook**, inscreva-se em `messages`.
+7. Adicione os números de teste (o seu e da família) em **WhatsApp → Início
+   rápido → Gerenciar lista de destinatários de teste**, e cadastre esses
+   mesmos números no perfil de cada pessoa dentro do app (com a senha de 4
+   dígitos).
+8. Mande "oi" pro número de teste que aparece no painel da Meta — o
+   assistente deve responder.
+
+Sem essas variáveis configuradas, o resto do app funciona normalmente (só a
+parte de receber pelo WhatsApp fica inativa).
+
+
 
 - **Sem login**: este projeto não tem autenticação. Qualquer pessoa com a
   URL pública vê e edita os dados de todos os perfis. Se for publicar
@@ -146,7 +213,13 @@ login), mas vale saber antes de divulgar o link amplamente.
   sugestões de novos exames consome créditos da sua chave da Anthropic
   (modelo `claude-sonnet-5`, até 1000 tokens de saída por chamada). A
   análise de sugestões só roda quando alguém clica em "Analisar", nunca
-  automaticamente.
+  automaticamente. Cada arquivo enviado pelo WhatsApp gera duas chamadas
+  (uma de classificação, bem barata, e uma de extração).
+- **Senha de 4 dígitos**: é uma proteção simples pra identificar quem está
+  mandando mensagem pelo número compartilhado, não uma senha forte de
+  verdade — não guarda nada além disso, e não impede alguém muito
+  insistente de tentar adivinhar (por isso o bloqueio de 15 min após 5
+  tentativas erradas). Não reutilize uma senha importante nela.
 - **Dados de saúde são sensíveis**: garanta backup do volume de dados e
   avalie criptografar o disco na hospedagem escolhida.
 - **Dicas e sugestões geradas não substituem avaliação médica** — isso já
@@ -160,6 +233,7 @@ server/         API em Express + SQLite
   index.js      rotas (perfis, laudos, extração por IA, dicas, alertas/sugestões)
   db.js         schema e conexão SQLite
   anthropic.js  chamada à API da Anthropic
+  whatsapp.js   webhook do WhatsApp (conversa, classificação e extração de arquivos recebidos)
   data/         (criado em runtime) banco de dados + PDFs guardados
 client/         frontend em React + Vite
   src/App.jsx   toda a interface
