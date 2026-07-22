@@ -319,8 +319,9 @@ export async function extractInvoice(profileId, file) {
   const r = await fetch("/api/extract-invoice", { method: "POST", body: fd });
   const data = await r.json();
   if (!r.ok) {
-    const err = new Error(data.error || "Erro ao processar a nota fiscal");
+    const err = new Error(data.message || data.error || "Erro ao processar a nota fiscal");
     err.duplicate = data.error === "duplicate";
+    err.notInvoice = data.error === "not_invoice";
     err.dupInfo = data;
     throw err;
   }
@@ -334,7 +335,12 @@ export async function saveInvoice(profileId, payload) {
     body: JSON.stringify(payload),
   });
   const data = await r.json();
-  if (!r.ok) throw new Error(data.error || "Erro ao salvar nota fiscal");
+  if (!r.ok) {
+    const err = new Error(data.error || "Erro ao salvar nota fiscal");
+    err.duplicate = data.error === "duplicate";
+    err.dupInfo = data;
+    throw err;
+  }
   return data;
 }
 

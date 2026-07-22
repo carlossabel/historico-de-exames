@@ -1076,6 +1076,12 @@ app.post("/api/extract-invoice", upload.single("file"), async (req, res) => {
       8000
     );
     const parsed = parseExamJson(text);
+    if (parsed && parsed.valid === false) {
+      return res.status(422).json({
+        error: "not_invoice",
+        message: "Esse arquivo não parece ser uma nota fiscal, NFS-e, recibo ou fatura de despesa médica/odontológica.",
+      });
+    }
     res.json({ ...parsed, hash, base64, fileName: req.file.originalname });
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao processar a nota fiscal" });
@@ -1085,9 +1091,15 @@ app.post("/api/extract-invoice", upload.single("file"), async (req, res) => {
 app.post("/api/profiles/:profileId/invoices", (req, res) => {
   try {
     const { profileId } = req.params;
-    const { date, provider, doc, value, category, description, deduct, base64, fileName, hash } = req.body || {};
+    const { date, provider, doc, value, category, description, base64, fileName, hash } = req.body || {};
     if (!date || value === undefined || value === null || value === "") {
       return res.status(400).json({ error: "Data e valor são obrigatórios" });
+    }
+    if (hash) {
+      const dup = db.prepare("SELECT date, provider FROM invoices WHERE profile_id = ? AND file_hash = ?").get(profileId, hash);
+      if (dup) {
+        return res.status(409).json({ error: "duplicate", date: dup.date, provider: dup.provider });
+      }
     }
     const invoiceId = uid();
     let hasPdf = 0;
@@ -1109,7 +1121,7 @@ app.post("/api/profiles/:profileId/invoices", (req, res) => {
       Number(value) || 0,
       category || "Outro",
       description || "",
-      deduct === false ? 0 : 1,
+      1,
       hash || null,
       fileName || "nota.pdf",
       hasPdf,

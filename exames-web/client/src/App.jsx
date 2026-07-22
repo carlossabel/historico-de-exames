@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-22b · Aba \"Notas fiscais (IR)\": histórico por data com download do documento original, igual aos laudos (sem exportação em CSV)";
+const APP_BUILD = "2026-07-22d · Painel: novos cards \"Exames que melhoraram\" e \"Exames que pioraram\" (quantidade nos últimos 180 dias)";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -92,6 +92,46 @@ function mergeLatestExamResults(orderedBatchIds, batches) {
     }
   }
   return merged;
+}
+
+const STATUS_RANK = { N: 2, A: 1, F: 0 };
+
+// Compara, para cada exame (por nome), a medição mais recente com a medição anterior a ela.
+// Conta como "melhorou"/"piorou" apenas os exames cuja medição mais recente caiu dentro da
+// janela de `days` dias — ou seja, mudanças de status que aconteceram (ou foram confirmadas)
+// nesse período recente, mesmo que a medição de comparação seja mais antiga que a janela.
+function computeExamTrends(orderedBatchIds, batches, days = 180) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffIso = cutoff.toISOString().slice(0, 10);
+
+  const batchIdsAsc = orderedBatchIds.slice().reverse(); // mais antigo -> mais recente
+  const byExam = {};
+  for (const batchId of batchIdsAsc) {
+    const batch = batches[batchId];
+    if (!batch || !Array.isArray(batch.results)) continue;
+    for (const r of batch.results) {
+      const key = (r.name || "").trim().toLowerCase();
+      if (!key || !STATUS_RANK.hasOwnProperty(r.status)) continue;
+      if (!byExam[key]) byExam[key] = [];
+      byExam[key].push({ date: batch.date, status: r.status, name: r.name });
+    }
+  }
+
+  const improved = [];
+  const worsened = [];
+  for (const key of Object.keys(byExam)) {
+    const list = byExam[key];
+    if (list.length < 2) continue;
+    const current = list[list.length - 1];
+    if (!current.date || current.date < cutoffIso) continue;
+    const baseline = list[list.length - 2];
+    const curRank = STATUS_RANK[current.status];
+    const baseRank = STATUS_RANK[baseline.status];
+    if (curRank > baseRank) improved.push(current.name);
+    else if (curRank < baseRank) worsened.push(current.name);
+  }
+  return { improved, worsened };
 }
 function fmtDate(d) {
   if (!d) return "";
@@ -2945,6 +2985,8 @@ function DashboardScreen({ profileId, profileName, profile, hasSuggestions, onOp
 
   const activeSymptoms = symptoms.filter((s) => s.status !== "resolvido").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
+  const examTrends = computeExamTrends(orderedBatchIds, batches, 180);
+
   const latestBatchMeta = index.length ? index.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0] : null;
 
   return (
@@ -3008,6 +3050,40 @@ function DashboardScreen({ profileId, profileName, profile, hasSuggestions, onOp
             <div className="space-y-1">
               {activeSymptoms.slice(0, 2).map((s) => (
                 <p key={s.id} className="text-xs text-slate-500 truncate">{s.description}</p>
+              ))}
+            </div>
+          )}
+        </DashboardCard>
+
+        <DashboardCard title="Exames que melhoraram" onClick={() => onGoTo("exames")}>
+          <div className="flex items-end gap-2 mb-2">
+            <TrendingUp size={16} className="text-emerald-600 mb-1" />
+            <span className="text-2xl font-medium text-slate-900">{examTrends.improved.length}</span>
+            <span className="text-xs text-slate-400 mb-1">últimos 180 dias</span>
+          </div>
+          {examTrends.improved.length === 0 ? (
+            <p className="text-xs text-slate-400">Nenhuma melhora registrada no período</p>
+          ) : (
+            <div className="space-y-1">
+              {examTrends.improved.slice(0, 2).map((name, i) => (
+                <p key={i} className="text-xs text-slate-500 truncate">{name}</p>
+              ))}
+            </div>
+          )}
+        </DashboardCard>
+
+        <DashboardCard title="Exames que pioraram" onClick={() => onGoTo("exames")}>
+          <div className="flex items-end gap-2 mb-2">
+            <TrendingDown size={16} className="text-red-600 mb-1" />
+            <span className="text-2xl font-medium text-slate-900">{examTrends.worsened.length}</span>
+            <span className="text-xs text-slate-400 mb-1">últimos 180 dias</span>
+          </div>
+          {examTrends.worsened.length === 0 ? (
+            <p className="text-xs text-slate-400">Nenhuma piora registrada no período</p>
+          ) : (
+            <div className="space-y-1">
+              {examTrends.worsened.slice(0, 2).map((name, i) => (
+                <p key={i} className="text-xs text-slate-500 truncate">{name}</p>
               ))}
             </div>
           )}
@@ -3076,7 +3152,6 @@ function InvoicesPanel({ profileId }) {
         value: parsed.v ?? "",
         description: parsed.desc || "",
         category: parsed.cat || "Outro",
-        deduct: parsed.deduct !== false,
         base64: parsed.base64,
         fileName: parsed.fileName,
         hash: parsed.hash,
@@ -3084,8 +3159,10 @@ function InvoicesPanel({ profileId }) {
     } catch (e) {
       if (e.duplicate) {
         setUploadError(`Essa nota já foi importada antes (${fmtDate(e.dupInfo.date)}, ${e.dupInfo.provider || "prestador não informado"}). Não vou importar de novo para não duplicar.`);
+      } else if (e.notInvoice) {
+        setUploadError(e.message || "Esse arquivo não parece ser uma nota fiscal ou recibo. Envie apenas notas fiscais, NFS-e, recibos ou faturas de despesas médicas/odontológicas.");
       } else {
-        setUploadError(e.message || "Não consegui ler esse PDF. Tente novamente ou adicione manualmente.");
+        setUploadError(e.message || "Não consegui ler esse PDF. Tente novamente.");
       }
     } finally {
       setUploading(false);
@@ -3093,9 +3170,18 @@ function InvoicesPanel({ profileId }) {
   };
 
   const saveInvoiceHandler = async (data) => {
-    const saved = await api.saveInvoice(profileId, data);
-    setInvoices((prev) => [saved, ...(prev || [])].sort((a, b) => (b.date || "").localeCompare(a.date || "")));
-    setReviewData(null);
+    try {
+      const saved = await api.saveInvoice(profileId, data);
+      setInvoices((prev) => [saved, ...(prev || [])].sort((a, b) => (b.date || "").localeCompare(a.date || "")));
+      setReviewData(null);
+    } catch (e) {
+      if (e.duplicate) {
+        setUploadError(`Essa nota já está salva (${fmtDate(e.dupInfo.date)}, ${e.dupInfo.provider || "prestador não informado"}). Não vou salvar de novo para não duplicar.`);
+        setReviewData(null);
+      } else {
+        throw e;
+      }
+    }
   };
 
   const removeInvoice = async (id) => {
@@ -3108,10 +3194,9 @@ function InvoicesPanel({ profileId }) {
   }
 
   const filtered = invoices.filter((i) => !year || (i.date || "").startsWith(year));
-  const deductibleTotal = filtered.filter((i) => i.deduct).reduce((s, i) => s + (i.value || 0), 0);
+  const total = filtered.reduce((s, i) => s + (i.value || 0), 0);
   const byCategory = {};
   for (const i of filtered) {
-    if (!i.deduct) continue;
     byCategory[i.category || "Outro"] = (byCategory[i.category || "Outro"] || 0) + (i.value || 0);
   }
 
@@ -3140,7 +3225,7 @@ function InvoicesPanel({ profileId }) {
           <div className="flex-1">{uploadError}</div>
           {!uploadError.startsWith("Essa nota já") && (
             <button
-              onClick={() => setReviewData({ date: new Date().toISOString().slice(0, 10), provider: "", doc: "", value: "", description: "", category: "Outro", deduct: true, base64: null })}
+              onClick={() => setReviewData({ date: new Date().toISOString().slice(0, 10), provider: "", doc: "", value: "", description: "", category: "Outro", base64: null })}
               className="text-xs underline whitespace-nowrap"
             >
               Adicionar manualmente
@@ -3152,12 +3237,12 @@ function InvoicesPanel({ profileId }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
         <div className="bg-slate-50 rounded-xl p-4">
           <p className="text-xs text-slate-500 mb-1">Total dedutível {year && `em ${year}`}</p>
-          <p className="text-2xl font-medium text-slate-900">{fmtBRL(deductibleTotal)}</p>
+          <p className="text-2xl font-medium text-slate-900">{fmtBRL(total)}</p>
         </div>
         <div className="bg-slate-50 rounded-xl p-4">
           <p className="text-xs text-slate-500 mb-1.5">Por categoria</p>
           <div className="flex flex-wrap gap-1.5">
-            {Object.keys(byCategory).length === 0 && <span className="text-xs text-slate-400">Nenhuma despesa dedutível ainda</span>}
+            {Object.keys(byCategory).length === 0 && <span className="text-xs text-slate-400">Nenhuma nota fiscal ainda</span>}
             {Object.entries(byCategory).map(([cat, v]) => (
               <span key={cat} className="text-xs bg-white border border-slate-200 rounded-full px-2 py-1 text-slate-600">
                 {cat}: {fmtBRL(v)}
@@ -3182,7 +3267,7 @@ function InvoicesPanel({ profileId }) {
                   <Receipt size={15} className="text-slate-400 shrink-0" />
                   <span className="text-sm text-slate-800 whitespace-nowrap">{fmtDate(inv.date)}</span>
                   <span className="text-xs text-slate-400 truncate">
-                    {inv.provider || "Prestador não informado"} · {inv.category || "Outro"}{!inv.deduct && " · não dedutível"} · {fmtBRL(inv.value)}
+                    {inv.provider || "Prestador não informado"} · {inv.category || "Outro"} · {fmtBRL(inv.value)}
                   </span>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
@@ -3205,7 +3290,7 @@ function InvoicesPanel({ profileId }) {
 
       <p className="text-xs text-slate-400 mt-3 flex items-start gap-1.5">
         <Info size={13} className="mt-0.5 shrink-0" />
-        A classificação de dedutibilidade é gerada automaticamente e pode errar — confirme sempre com um contador antes de declarar.
+        A categorização é gerada automaticamente e pode errar — confirme sempre com um contador antes de declarar.
       </p>
 
       {confirmDelete && (
@@ -3230,7 +3315,6 @@ function ReviewInvoiceModal({ data, onCancel, onConfirm }) {
   const [value, setValue] = useState(data.value ?? "");
   const [category, setCategory] = useState(data.category || "Outro");
   const [description, setDescription] = useState(data.description || "");
-  const [deduct, setDeduct] = useState(data.deduct !== false);
 
   return (
     <ModalShell onClose={onCancel} title="Confira os dados da nota">
@@ -3263,19 +3347,15 @@ function ReviewInvoiceModal({ data, onCancel, onConfirm }) {
           </select>
         </div>
       </div>
-      <div className="mb-3">
+      <div className="mb-4">
         <label className="text-xs text-slate-500 mb-1 block">Descrição</label>
         <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Opcional" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
       </div>
-      <label className="flex items-center gap-2 text-sm text-slate-700 mb-4">
-        <input type="checkbox" checked={deduct} onChange={(e) => setDeduct(e.target.checked)} />
-        Dedutível no Imposto de Renda
-      </label>
       <div className="flex justify-end gap-2">
         <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
         <button
           disabled={!date || value === "" || value === null}
-          onClick={() => onConfirm({ date, provider, doc, value: parseFloat(value) || 0, category, description, deduct, base64: data.base64, fileName: data.fileName, hash: data.hash })}
+          onClick={() => onConfirm({ date, provider, doc, value: parseFloat(value) || 0, category, description, base64: data.base64, fileName: data.fileName, hash: data.hash })}
           className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
         >
           Salvar
