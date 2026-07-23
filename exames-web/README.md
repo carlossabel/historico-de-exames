@@ -226,7 +226,7 @@ parte de receber pelo WhatsApp fica inativa).
   fica explícito na interface, mas vale reforçar para quem for usar o
   sistema.
 
-## Catálogo de exames (unificar nomes e referências entre laboratórios)
+## Unificar exames (nomes e referências entre laboratórios)
 
 Laboratórios diferentes escrevem o mesmo exame de formas diferentes (ex: "Hemoglobina",
 "Hb", "HGB") e usam faixas de referência ligeiramente diferentes. O app resolve isso com
@@ -240,7 +240,7 @@ no momento da importação de um laudo novo.
 - **Ao importar um laudo** (PDF manual ou pelo WhatsApp), a tela de revisão continua como
   antes: só os campos do próprio laudo (nome, valor, unidade, referência, status), sem
   nenhuma sugestão de padronização.
-- **A tela "Catálogo de exames"** (botão no topo da aba Exames, dentro do perfil) é onde a
+- **A tela "Unificar exames"** (botão no topo do perfil, visível em qualquer aba) é onde a
   padronização acontece, com duas partes:
   - **Unificar existentes**: lista os nomes de exames já salvos que ainda não estão
     padronizados. Um botão "Sugerir agrupamentos com IA" analisa essa lista e propõe quais

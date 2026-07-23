@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-23d · No histórico de um exame (gráfico de evolução), cada medição agora tem um link pra abrir o laudo original em PDF, quando disponível";
+const APP_BUILD = "2026-07-23e · Botão 'Catálogo de exames' virou 'Unificar exames' e foi movido pro topo do perfil, visível em qualquer aba (antes só aparecia na aba Exames)";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -1112,18 +1112,20 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
             <p className="text-xs text-slate-400">{index.length} laudo{index.length !== 1 ? "s" : ""} no histórico</p>
           </div>
         </div>
-        {tab === "exames" && (
-          <div className="flex items-center gap-2">
-            <button onClick={() => setCatalogModalOpen(true)} className="flex items-center gap-1.5 text-slate-600 text-sm font-medium px-3.5 py-2 rounded-lg border border-slate-200 hover:bg-slate-50">
-              <ClipboardEdit size={15} /> Catálogo de exames
-            </button>
-            <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
-            <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
-              {uploading ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
-              {uploading ? "Lendo PDF..." : "Enviar PDF de exame"}
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          <button onClick={() => setCatalogModalOpen(true)} className="flex items-center gap-1.5 text-slate-600 text-sm font-medium px-3.5 py-2 rounded-lg border border-slate-200 hover:bg-slate-50">
+            <ClipboardEdit size={15} /> Unificar exames
+          </button>
+          {tab === "exames" && (
+            <>
+              <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
+              <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
+                {uploading ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+                {uploading ? "Lendo PDF..." : "Enviar PDF de exame"}
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="flex items-center gap-1 mb-6 border-b border-slate-200 overflow-x-auto">
@@ -1246,10 +1248,10 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
       {selectedExam && <ExamEvolutionModal examName={selectedExam} orderedBatchIds={orderedBatchIds} batches={batches} profileId={profile.id} onClose={() => setSelectedExam(null)} />}
 
       {reviewData && <ReviewModal data={reviewData} onCancel={() => { setReviewData(null); setReviewFromWaId(null); }} onConfirm={saveBatch} />}
-      {catalogModalOpen && <ExamCatalogModal onClose={() => setCatalogModalOpen(false)} onChanged={load} />}
       </>
       )}
 
+      {catalogModalOpen && <ExamCatalogModal onClose={() => setCatalogModalOpen(false)} onChanged={load} />}
       {editProfileOpen && <EditProfileModal profile={profile} onClose={() => setEditProfileOpen(false)} onSave={saveProfileEdit} />}
 
       {waInboxOpen && (
@@ -1712,7 +1714,7 @@ function ReviewModal({ data, onCancel, onConfirm }) {
   return (
     <ModalShell onClose={onCancel} title="Confira os exames extraídos" wide>
       <p className="text-xs text-slate-500 mb-3 flex items-center gap-1.5">
-        <ClipboardEdit size={13} /> Revise e corrija antes de salvar — a leitura automática pode errar. Para unificar nomes/referências entre laboratórios, use o "Catálogo de exames" na aba Exames depois de salvar.
+        <ClipboardEdit size={13} /> Revise e corrija antes de salvar — a leitura automática pode errar. Para unificar nomes/referências entre laboratórios, use o botão "Unificar exames" no topo do perfil depois de salvar.
       </p>
       <div className="grid grid-cols-3 gap-3 mb-4">
         <div>
@@ -1894,7 +1896,7 @@ function ExamCatalogModal({ onClose, onChanged }) {
   };
 
   return (
-    <ModalShell onClose={onClose} title="Catálogo de exames" wide>
+    <ModalShell onClose={onClose} title="Unificar exames" wide>
       <p className="text-xs text-slate-500 mb-4">
         Unifique exames com nomes diferentes entre laboratórios e mantenha uma única referência para cada um. Isso vale para todo o histórico já salvo — e para novos laudos, o app já sugere a padronização na hora de revisar.
       </p>
