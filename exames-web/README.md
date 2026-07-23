@@ -299,44 +299,43 @@ automaticamente (sem gastar créditos de IA) sempre que é aberto:
 médica específica nem uma prescrição — o sino deixa isso explícito, e a decisão de fazer
 ou não cada exame deve ser validada com um médico.
 
-## Login com Google, compartilhamento e administração
+## Login (e-mail e senha), compartilhamento e administração
 
-O app agora exige login com uma conta Google. Só entra quem já foi convidado (associado a
-pelo menos um perfil) — ninguém se autocadastra sozinho.
+O app exige login com e-mail e senha (sem depender de nenhum provedor externo — não precisa
+configurar nada no Google, Railway, etc. pra login funcionar). Só existem contas criadas
+manualmente (pelo seed inicial ou por um administrador) — não tem cadastro público.
 
-### Configuração necessária (uma vez, no Google Cloud Console + Railway)
-1. No [Google Cloud Console](https://console.cloud.google.com/apis/credentials), crie um
-   projeto (ou use um existente) e uma credencial do tipo **OAuth client ID** → tipo
-   **Web application**.
-2. Em **Authorized redirect URIs**, adicione:
-   `https://SEU-DOMINIO-NO-RAILWAY/api/auth/google/callback`
-   (troque pelo domínio real do seu deploy).
-3. Copie o **Client ID** e o **Client Secret** gerados.
-4. No Railway, nas variáveis de ambiente do serviço, adicione:
-   - `GOOGLE_CLIENT_ID` = o Client ID copiado
-   - `GOOGLE_CLIENT_SECRET` = o Client Secret copiado
-5. Redeploy. A tela de login passa a mostrar o botão "Entrar com o Google" assim que essas
-   variáveis estiverem configuradas (antes disso, ela avisa que falta configurar).
+### Contas iniciais
+No primeiro start do servidor com essa versão, duas contas são criadas automaticamente (ou
+atualizadas, se já vierem de uma versão anterior com login por Google), com a senha
+provisória **`mudar123`**:
+- **carlossabel@gmail.com** — vira administrador e dono do perfil "Carlos Eduardo Sabel"
+- **alinevalentini89@gmail.com** — vira dono do perfil "Aline Valentini Sabel"
 
-### Associação inicial
-No primeiro start do servidor com essa versão, os dois perfis já existentes são associados
-automaticamente aos e-mails combinados: **carlossabel@gmail.com** vira administrador e dono
-do perfil "Carlos Eduardo Sabel"; **alinevalentini89@gmail.com** vira dono do perfil "Aline
-Valentini Sabel". Isso só funciona se os nomes dos perfis no banco forem exatamente esses
-(a associação é feita por nome, uma única vez, e não sobrescreve nada se já tiver sido
-feita antes).
+(A associação com o perfil é feita pelo nome exato do perfil já existente no banco, uma
+única vez — não sobrescreve nada se já tiver sido feita antes.)
+
+**Troque a senha provisória assim que entrar** — em qualquer tela, no canto superior
+esquerdo, tem um link "Minha conta" com o formulário de troca de senha.
 
 ### Compartilhar um perfil (aparece como "perfil da família")
 Dentro de **Editar perfil** (lápis), seção "Compartilhar perfil": o dono do perfil (ou o
 administrador) pode digitar o e-mail de outra pessoa da família e dar acesso a ele. Quem
-recebe o acesso passa a ver esse perfil na tela inicial, marcado como "Perfil da família"
-— mesmo que essa pessoa ainda não tenha feito login antes (o acesso é liberado assim que
-ela entrar pela primeira vez com aquele e-mail).
+recebe o acesso passa a ver esse perfil na tela inicial, marcado como "Perfil da família".
+Se essa pessoa ainda não tiver uma conta, um administrador precisa criar uma primeiro (veja
+abaixo) — diferente da versão anterior com Google, aqui não existe criação automática de
+conta no primeiro login.
 
 ### Área de administração
 Só quem tem o papel de administrador (hoje, Carlos) vê o link "Administração" na tela
-inicial: lista todas as contas com acesso ao sistema, quais perfis cada uma pode ver, e
-permite promover ou remover o papel de administrador de qualquer conta.
+inicial:
+- Lista todas as contas, quais perfis cada uma pode ver, e quando foi o último login.
+- **Criar usuário**: cadastra uma conta nova (e-mail, nome, senha provisória, papel). É
+  assim que se adiciona alguém novo à família — depois de criada a conta, compartilhe um
+  perfil com o e-mail dela (ou crie um perfil novo já logado com essa conta).
+- **Redefinir senha**: define uma nova senha pra qualquer conta (útil se alguém esquecer a
+  senha, já que não existe "esqueci minha senha" automático).
+- **Tornar/remover admin**: promove ou rebaixa o papel de qualquer conta.
 
 ## Estrutura
 

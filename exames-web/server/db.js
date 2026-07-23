@@ -341,16 +341,15 @@ if (!resultsCols.includes("raw_ref")) {
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_results_catalog ON results(catalog_id)");
 
-// ---------- Login com Google e controle de acesso por perfil ----------
-// `users`: contas que já fizeram login pelo menos uma vez (ou foram pré-cadastradas pelo
-// admin), com um papel (admin vê tudo; member só vê o que tiver em profile_access).
+// ---------- Login próprio (e-mail + senha) e controle de acesso por perfil ----------
+// `users`: contas cadastradas manualmente (pelo admin, ou seed inicial), com um papel
+// (admin vê tudo; member só vê o que tiver em profile_access).
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
-    google_sub TEXT UNIQUE,
     email TEXT UNIQUE NOT NULL,
     name TEXT,
-    picture TEXT,
+    password_hash TEXT,
     role TEXT NOT NULL DEFAULT 'member',
     created_at INTEGER NOT NULL,
     last_login_at INTEGER
@@ -364,7 +363,7 @@ db.exec(`
   );
 
   -- Quem pode acessar cada perfil, por e-mail (não por user_id) — assim dá pra "convidar"
-  -- alguém pra um perfil mesmo antes dessa pessoa ter feito login pela primeira vez.
+  -- alguém pra um perfil mesmo antes da conta dessa pessoa ser criada.
   CREATE TABLE IF NOT EXISTS profile_access (
     id TEXT PRIMARY KEY,
     profile_id TEXT NOT NULL,
@@ -378,10 +377,26 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 `);
 
+// Migração leve: bancos que vieram de uma versão anterior (login com Google) tinham
+// google_sub em vez de password_hash.
+const usersCols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+if (!usersCols.includes("password_hash")) {
+  db.exec("ALTER TABLE users ADD COLUMN password_hash TEXT");
+}
+
+// Hash de senha simples com o módulo nativo `crypto` (scrypt), sem dependências externas.
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+const DEFAULT_PASSWORD = "mudar123";
+
 // Associação inicial pedida: o e-mail do Carlos vira admin e dono do perfil "Carlos Eduardo
-// Sabel"; o e-mail da Aline vira dono do perfil "Aline Valentini Sabel". Roda a cada
-// start, mas só faz efeito se ainda não tiver sido feito (idempotente) — não sobrescreve
-// nada se já existir.
+// Sabel"; o e-mail da Aline vira dono do perfil "Aline Valentini Sabel". Os dois recebem a
+// senha provisória "mudar123" (documentada no README) — o ideal é trocar assim que entrar.
+// Roda a cada start, mas só faz efeito se ainda não tiver sido feito (idempotente).
 function seedFamilyAccess() {
   const seeds = [
     { email: "carlossabel@gmail.com", name: "Carlos Eduardo Sabel", role: "admin", profileNameMatch: "carlos eduardo sabel" },
@@ -390,9 +405,12 @@ function seedFamilyAccess() {
   for (const s of seeds) {
     const existingUser = db.prepare("SELECT id FROM users WHERE email = ?").get(s.email);
     if (!existingUser) {
-      db.prepare("INSERT INTO users (id, email, name, role, created_at) VALUES (?,?,?,?,?)").run(
-        crypto.randomUUID(), s.email, s.name, s.role, Date.now()
+      db.prepare("INSERT INTO users (id, email, name, password_hash, role, created_at) VALUES (?,?,?,?,?,?)").run(
+        crypto.randomUUID(), s.email, s.name, hashPassword(DEFAULT_PASSWORD), s.role, Date.now()
       );
+    } else if (!existingUser.password_hash) {
+      // Conta veio de uma versão anterior (login com Google) sem senha nenhuma cadastrada.
+      db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(DEFAULT_PASSWORD), existingUser.id);
     }
     const profile = db.prepare("SELECT id FROM profiles WHERE LOWER(TRIM(name)) = ?").get(s.profileNameMatch);
     if (profile) {
@@ -408,4 +426,4 @@ function seedFamilyAccess() {
 seedFamilyAccess();
 
 export default db;
-export { pdfDir, bodyPhotoDir, invoiceDir, whatsappDir };
+export { pdfDir, bodyPhotoDir, invoiceDir, whatsappDir, hashPassword };

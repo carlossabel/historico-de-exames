@@ -1,8 +1,14 @@
-// ---------- Autenticação (login com Google) ----------
+// ---------- Autenticação (login com e-mail e senha) ----------
 
-export async function getAuthConfig() {
-  const r = await fetch("/api/auth/config");
-  return r.json();
+export async function login(email, password) {
+  const r = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao entrar");
+  return data;
 }
 
 export async function getMe() {
@@ -13,6 +19,17 @@ export async function getMe() {
 
 export async function logout() {
   await fetch("/api/auth/logout", { method: "POST" });
+}
+
+export async function changePassword(currentPassword, newPassword) {
+  const r = await fetch("/api/auth/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao trocar senha");
+  return data;
 }
 
 // ---------- Compartilhar perfil (área da família) ----------
@@ -57,6 +74,28 @@ export async function updateUserRole(userId, role) {
   });
   const data = await r.json();
   if (!r.ok) throw new Error(data.error || "Erro ao atualizar papel do usuário");
+  return data;
+}
+
+export async function createUser(payload) {
+  const r = await fetch("/api/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao criar usuário");
+  return data;
+}
+
+export async function setUserPassword(userId, password) {
+  const r = await fetch(`/api/admin/users/${userId}/set-password`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao redefinir senha");
   return data;
 }
 

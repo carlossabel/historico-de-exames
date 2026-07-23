@@ -5,14 +5,14 @@ import {
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
   FileUp, Download, Weight, Pencil, Stethoscope, Dumbbell, Camera, Watch, Link, Copy, RefreshCw,
   Footprints, PersonStanding, Bike, Waves, Mountain, CircleDot, Music, Zap, Flame, Receipt, MessageCircle, Bell,
-  Shield, LogOut, Users,
+  Shield, LogOut, Users, Lock,
 } from "lucide-react";
 import * as api from "./api.js";
 
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-23o · Corrigido: /api/auth/config e outras rotas de API estavam sendo cacheadas pelo navegador (respostas 304), fazendo o app achar que o login do Google não estava configurado mesmo depois de salvar as variáveis";
+const APP_BUILD = "2026-07-23p · Login com Google removido, substituído por login próprio (e-mail + senha). Contas iniciais: carlossabel@gmail.com (admin) e alinevalentini89@gmail.com, senha provisória 'mudar123' — trocar em 'Minha conta'";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -385,14 +385,6 @@ export default function App() {
   const refreshProfiles = async () => setProfiles(await api.getProfiles());
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("auth") === "denied") {
-      setAuthError(`O e-mail ${params.get("email") || ""} ainda não tem acesso. Peça pra ${"Carlos Eduardo Sabel"} compartilhar um perfil com você.`);
-      window.history.replaceState({}, "", window.location.pathname);
-    } else if (params.get("auth") === "error") {
-      setAuthError("Não consegui concluir o login com o Google. Tente novamente.");
-      window.history.replaceState({}, "", window.location.pathname);
-    }
     api.getMe().then((me) => {
       setUser(me);
       setAuthChecked(true);
@@ -453,7 +445,7 @@ export default function App() {
   }
 
   if (!user) {
-    return <LoginScreen error={authError} />;
+    return <LoginScreen error={authError} onLoggedIn={setUser} />;
   }
 
   if (profiles === null) {
@@ -506,12 +498,26 @@ export default function App() {
   );
 }
 
-function LoginScreen({ error }) {
-  const [config, setConfig] = useState(null);
+function LoginScreen({ error, onLoggedIn }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState(null);
 
-  useEffect(() => {
-    api.getAuthConfig().then(setConfig).catch(() => setConfig({ googleConfigured: false }));
-  }, []);
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!email.trim() || !password) return;
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      const user = await api.login(email.trim(), password);
+      onLoggedIn(user);
+    } catch (err) {
+      setFormError(err.message || "Erro ao entrar");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="w-full max-w-sm mx-auto px-4 py-24 text-center">
@@ -519,7 +525,7 @@ function LoginScreen({ error }) {
         <User size={24} />
       </div>
       <h1 className="text-xl font-medium text-slate-900 mb-1">Histórico de exames</h1>
-      <p className="text-sm text-slate-500 mb-6">Entre com sua conta Google para acessar os perfis da família.</p>
+      <p className="text-sm text-slate-500 mb-6">Entre com seu e-mail e senha para acessar os perfis da família.</p>
 
       {error && (
         <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-left">
@@ -527,22 +533,43 @@ function LoginScreen({ error }) {
         </div>
       )}
 
-      {config === null ? (
-        <div className="flex justify-center py-4 text-slate-400"><Loader2 className="animate-spin" size={20} /></div>
-      ) : config.googleConfigured ? (
-        <a
-          href="/api/auth/google/start"
-          className="inline-flex items-center gap-2 bg-slate-900 text-white text-sm font-medium px-5 py-2.5 rounded-lg hover:bg-slate-800"
-        >
-          Entrar com o Google
-        </a>
-      ) : (
-        <div className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-left">
-          O login com Google ainda não foi configurado neste servidor. Um administrador precisa
-          definir as variáveis de ambiente <code className="font-mono">GOOGLE_CLIENT_ID</code> e{" "}
-          <code className="font-mono">GOOGLE_CLIENT_SECRET</code> no Railway.
+      <form onSubmit={handleSubmit} className="text-left space-y-3">
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">E-mail</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="username"
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+          />
         </div>
-      )}
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Senha</label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+          />
+        </div>
+
+        {formError && (
+          <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+            <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {formError}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          disabled={!email.trim() || !password || submitting}
+          className="w-full flex items-center justify-center gap-2 bg-slate-900 text-white text-sm font-medium px-5 py-2.5 rounded-lg hover:bg-slate-800 disabled:opacity-50"
+        >
+          {submitting && <Loader2 size={15} className="animate-spin" />}
+          {submitting ? "Entrando..." : "Entrar"}
+        </button>
+      </form>
     </div>
   );
 }
@@ -551,6 +578,16 @@ function AdminScreen({ onBack }) {
   const [users, setUsers] = useState(null);
   const [error, setError] = useState(null);
   const [savingId, setSavingId] = useState(null);
+  const [resetTarget, setResetTarget] = useState(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetError, setResetError] = useState(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newRole, setNewRole] = useState("member");
+  const [createError, setCreateError] = useState(null);
+  const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -575,12 +612,44 @@ function AdminScreen({ onBack }) {
     }
   };
 
+  const handleResetPassword = async () => {
+    if (resetPassword.length < 4) return setResetError("A senha precisa ter ao menos 4 caracteres.");
+    try {
+      await api.setUserPassword(resetTarget.id, resetPassword);
+      setResetTarget(null);
+      setResetPassword("");
+      setResetError(null);
+    } catch (e) {
+      setResetError(e.message || "Erro ao redefinir senha");
+    }
+  };
+
+  const handleCreate = async () => {
+    setCreateError(null);
+    setCreating(true);
+    try {
+      await api.createUser({ email: newEmail, name: newName, password: newPassword, role: newRole });
+      setShowCreate(false);
+      setNewEmail(""); setNewName(""); setNewPassword(""); setNewRole("member");
+      await load();
+    } catch (e) {
+      setCreateError(e.message || "Erro ao criar usuário");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div className="w-full max-w-3xl mx-auto">
       <button onClick={onBack} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-4">
         <ArrowLeft size={15} /> Perfis
       </button>
-      <h1 className="text-xl font-medium text-slate-900 mb-1">Administração</h1>
+      <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+        <h1 className="text-xl font-medium text-slate-900">Administração</h1>
+        <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 text-sm bg-slate-900 text-white px-3 py-1.5 rounded-lg hover:bg-slate-800">
+          <Plus size={14} /> Criar usuário
+        </button>
+      </div>
       <p className="text-sm text-slate-500 mb-5">Todas as contas com acesso ao sistema e os perfis que cada uma pode ver.</p>
 
       {error && (
@@ -612,15 +681,71 @@ function AdminScreen({ onBack }) {
                   Último login: {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString("pt-BR") : "nunca"}
                 </p>
               </div>
-              <button
-                onClick={() => toggleRole(u)}
-                disabled={savingId === u.id}
-                className="text-xs px-2.5 py-1.5 rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50 shrink-0"
-              >
-                {savingId === u.id ? "..." : u.role === "admin" ? "Remover admin" : "Tornar admin"}
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => { setResetTarget(u); setResetPassword(""); setResetError(null); }}
+                  className="text-xs px-2.5 py-1.5 rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50"
+                >
+                  Redefinir senha
+                </button>
+                <button
+                  onClick={() => toggleRole(u)}
+                  disabled={savingId === u.id}
+                  className="text-xs px-2.5 py-1.5 rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {savingId === u.id ? "..." : u.role === "admin" ? "Remover admin" : "Tornar admin"}
+                </button>
+              </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {resetTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-5 w-full max-w-sm">
+            <h3 className="text-sm font-medium text-slate-800 mb-3">Redefinir senha de {resetTarget.name || resetTarget.email}</h3>
+            <input
+              type="text"
+              value={resetPassword}
+              onChange={(e) => setResetPassword(e.target.value)}
+              placeholder="Nova senha (mín. 4 caracteres)"
+              className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm mb-2"
+            />
+            {resetError && <p className="text-xs text-red-600 mb-2">{resetError}</p>}
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setResetTarget(null)} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
+              <button onClick={handleResetPassword} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800">Salvar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCreate && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-5 w-full max-w-sm">
+            <h3 className="text-sm font-medium text-slate-800 mb-3">Criar novo usuário</h3>
+            <div className="space-y-2 mb-2">
+              <input type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="E-mail" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+              <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Nome" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+              <input type="text" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Senha provisória (mín. 4 caracteres)" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+              <select value={newRole} onChange={(e) => setNewRole(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+                <option value="member">Membro</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            {createError && <p className="text-xs text-red-600 mb-2">{createError}</p>}
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowCreate(false)} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
+              <button
+                disabled={!newEmail.trim() || !newPassword || creating}
+                onClick={handleCreate}
+                className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
+              >
+                {creating ? "Criando..." : "Criar"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -631,6 +756,7 @@ function HomeScreen({ profiles, user, onOpen, onAdd, onRemove, onImport, onLogou
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState(null);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   const handleExport = async () => {
     setExporting(true);
@@ -655,6 +781,9 @@ function HomeScreen({ profiles, user, onOpen, onAdd, onRemove, onImport, onLogou
       <div className="flex items-center justify-between mb-4 text-xs text-slate-400">
         <span className="truncate">{user.name || user.email}{user.role === "admin" ? " · admin" : ""}</span>
         <div className="flex items-center gap-3 shrink-0">
+          <button onClick={() => setShowChangePassword(true)} className="hover:text-slate-700 flex items-center gap-1">
+            <Lock size={13} /> Minha conta
+          </button>
           {user.role === "admin" && (
             <button onClick={onOpenAdmin} className="hover:text-slate-700 flex items-center gap-1">
               <Shield size={13} /> Administração
@@ -665,6 +794,8 @@ function HomeScreen({ profiles, user, onOpen, onAdd, onRemove, onImport, onLogou
           </button>
         </div>
       </div>
+
+      {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} />}
 
       <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
         <div>
@@ -732,6 +863,76 @@ function HomeScreen({ profiles, user, onOpen, onAdd, onRemove, onImport, onLogou
 
       <p className="text-center text-[10px] text-slate-300 mt-10">build: {APP_BUILD}</p>
     </div>
+  );
+}
+
+function ChangePasswordModal({ onClose }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [done, setDone] = useState(false);
+
+  const handleSave = async () => {
+    if (newPassword.length < 4) return setError("A nova senha precisa ter ao menos 4 caracteres.");
+    if (newPassword !== confirmPassword) return setError("As duas senhas novas não são iguais.");
+    setSaving(true);
+    setError(null);
+    try {
+      await api.changePassword(currentPassword, newPassword);
+      setDone(true);
+    } catch (e) {
+      setError(e.message || "Erro ao trocar senha");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell onClose={onClose} title="Minha conta">
+      {done ? (
+        <div className="text-center py-4">
+          <CheckCircle2 size={28} className="text-emerald-500 mx-auto mb-2" />
+          <p className="text-sm text-slate-700">Senha atualizada com sucesso.</p>
+          <button onClick={onClose} className="mt-4 text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800">Fechar</button>
+        </div>
+      ) : (
+        <>
+          <p className="text-xs text-slate-500 mb-4">Trocar sua senha de acesso ao app.</p>
+          <div className="space-y-3 mb-4">
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Senha atual</label>
+              <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} autoComplete="current-password" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Nova senha</label>
+              <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Confirmar nova senha</label>
+              <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} autoComplete="new-password" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+            </div>
+          </div>
+          {error && (
+            <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
+            <button
+              disabled={!currentPassword || !newPassword || !confirmPassword || saving}
+              onClick={handleSave}
+              className="flex items-center gap-1.5 text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
+            >
+              {saving && <Loader2 size={14} className="animate-spin" />}
+              {saving ? "Salvando..." : "Trocar senha"}
+            </button>
+          </div>
+        </>
+      )}
+    </ModalShell>
   );
 }
 

@@ -6,7 +6,7 @@ import fs from "fs";
 import crypto from "crypto";
 import cookieParser from "cookie-parser";
 import { fileURLToPath } from "url";
-import db, { pdfDir, bodyPhotoDir, invoiceDir, whatsappDir } from "./db.js";
+import db, { pdfDir, bodyPhotoDir, invoiceDir, whatsappDir, hashPassword } from "./db.js";
 import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, INVOICE_EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, buildBodyAgePrompt, buildBodyMetricInfoPrompt, BODY_PHOTO_EXTRACTION_PROMPT, buildExamMatchPrompt, buildExamGroupingPrompt, parseRefBounds, computeStatusFromRef } from "./anthropic.js";
 import { verifyWebhook, handleWebhook, normalizePhone } from "./whatsapp.js";
 
@@ -30,7 +30,7 @@ function getBaseUrl(req) {
   return `${proto}://${req.get("host")}`;
 }
 
-// ---------- Login com Google e controle de acesso por perfil ----------
+// ---------- Login (e-mail e senha) e controle de acesso por perfil ----------
 // Sessão simples: um token aleatório guardado num cookie httpOnly, com a linha
 // correspondente na tabela `sessions` apontando pro usuário. Sem JWT, sem dependências
 // pesadas — mesmo espírito das outras integrações OAuth2 já existentes (Strava).
@@ -61,22 +61,12 @@ function getSessionUser(req) {
   if (!sid) return null;
   const row = db
     .prepare(
-      `SELECT u.id, u.email, u.name, u.picture, u.role FROM sessions s
+      `SELECT u.id, u.email, u.name, u.role FROM sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.id = ? AND s.expires_at > ?`
     )
     .get(sid, Date.now());
   return row || null;
-}
-
-// Só pode entrar quem já tem alguma linha em profile_access (foi convidado pra pelo menos
-// um perfil) ou já existe como usuário — evita que qualquer conta Google se autocadastre.
-function isEmailAllowed(email) {
-  const norm = (email || "").toLowerCase();
-  const asUser = db.prepare("SELECT id FROM users WHERE email = ?").get(norm);
-  if (asUser) return true;
-  const asAccess = db.prepare("SELECT id FROM profile_access WHERE LOWER(email) = ?").get(norm);
-  return !!asAccess;
 }
 
 function requireAuth(req, res, next) {
@@ -91,8 +81,8 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-// Rotas que precisam continuar acessíveis SEM login: a própria autenticação, o webhook do
-// WhatsApp (chamado pela Meta, não pelo navegador) e o callback do Strava/Google.
+// Rotas que precisam continuar acessíveis SEM login: a própria autenticação e o webhook do
+// WhatsApp (chamado pela Meta, não pelo navegador).
 const PUBLIC_API_PREFIXES = ["/api/auth/", "/api/whatsapp/webhook"];
 app.use((req, res, next) => {
   if (!req.path.startsWith("/api/")) return next();
@@ -109,10 +99,18 @@ app.param("profileId", (req, res, next, profileId) => {
   next();
 });
 
-app.get("/api/auth/config", (req, res) => {
-  res.set("Cache-Control", "no-store");
-  res.json({ googleConfigured: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) });
-});
+function verifyPassword(password, stored) {
+  if (!stored || !password) return false;
+  const [salt, hash] = stored.split(":");
+  if (!salt || !hash) return false;
+  try {
+    const hashBuffer = Buffer.from(hash, "hex");
+    const testHash = crypto.scryptSync(password, salt, 64);
+    return hashBuffer.length === testHash.length && crypto.timingSafeEqual(hashBuffer, testHash);
+  } catch (e) {
+    return false;
+  }
+}
 
 app.get("/api/auth/me", (req, res) => {
   res.set("Cache-Control", "no-store");
@@ -128,68 +126,29 @@ app.post("/api/auth/logout", (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/auth/google/start", (req, res) => {
-  if (!process.env.GOOGLE_CLIENT_ID) {
-    return res.status(500).send("GOOGLE_CLIENT_ID não configurado no servidor. Peça pro administrador configurar as variáveis de ambiente do Google.");
+app.post("/api/auth/login", (req, res) => {
+  const { email, password } = req.body || {};
+  const norm = (email || "").trim().toLowerCase();
+  if (!norm || !password) return res.status(400).json({ error: "Informe e-mail e senha." });
+  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(norm);
+  if (!user || !verifyPassword(password, user.password_hash)) {
+    return res.status(401).json({ error: "E-mail ou senha inválidos." });
   }
-  const redirectUri = `${getBaseUrl(req)}/api/auth/google/callback`;
-  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(process.env.GOOGLE_CLIENT_ID)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent("openid email profile")}&prompt=select_account`;
-  res.redirect(url);
+  db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(Date.now(), user.id);
+  const sessionId = createSession(user.id);
+  setSessionCookie(req, res, sessionId);
+  res.json({ id: user.id, email: user.email, name: user.name, role: user.role });
 });
 
-app.get("/api/auth/google/callback", async (req, res) => {
-  try {
-    const { code } = req.query;
-    if (!code) return res.redirect("/?auth=error");
-    const redirectUri = `${getBaseUrl(req)}/api/auth/google/callback`;
-    const tokenResp = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code, client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET,
-        redirect_uri: redirectUri, grant_type: "authorization_code",
-      }),
-    });
-    const tokenData = await tokenResp.json();
-    if (!tokenResp.ok || !tokenData.access_token) {
-      console.error("Erro ao trocar código do Google:", tokenData);
-      return res.redirect("/?auth=error");
-    }
-    const userResp = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` },
-    });
-    const profile = await userResp.json();
-    if (!userResp.ok || !profile.email) {
-      console.error("Erro ao buscar perfil do Google:", profile);
-      return res.redirect("/?auth=error");
-    }
-
-    const email = profile.email.toLowerCase();
-    if (!isEmailAllowed(email)) {
-      return res.redirect(`/?auth=denied&email=${encodeURIComponent(email)}`);
-    }
-
-    let user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
-    const now = Date.now();
-    if (!user) {
-      const id = crypto.randomUUID();
-      db.prepare("INSERT INTO users (id, google_sub, email, name, picture, role, created_at, last_login_at) VALUES (?,?,?,?,?,?,?,?)").run(
-        id, profile.sub || null, email, profile.name || "", profile.picture || null, "member", now, now
-      );
-      user = { id };
-    } else {
-      db.prepare("UPDATE users SET google_sub = ?, name = ?, picture = ?, last_login_at = ? WHERE id = ?").run(
-        profile.sub || user.google_sub, profile.name || user.name, profile.picture || user.picture, now, user.id
-      );
-    }
-
-    const sessionId = createSession(user.id);
-    setSessionCookie(req, res, sessionId);
-    res.redirect("/");
-  } catch (e) {
-    console.error("Erro no callback do Google:", e);
-    res.redirect("/?auth=error");
+app.post("/api/auth/change-password", requireAuth, (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!newPassword || newPassword.length < 4) return res.status(400).json({ error: "A nova senha precisa ter ao menos 4 caracteres." });
+  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+  if (!verifyPassword(currentPassword, user.password_hash)) {
+    return res.status(401).json({ error: "Senha atual incorreta." });
   }
+  db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(newPassword), user.id);
+  res.json({ ok: true });
 });
 
 // ---------- Catálogo de exames padrão ----------
@@ -473,7 +432,7 @@ app.delete("/api/profiles/:profileId/access/:email", (req, res) => {
 
 // ---------- Administração (apenas o admin) ----------
 app.get("/api/admin/users", requireAdmin, (req, res) => {
-  const users = db.prepare("SELECT id, email, name, picture, role, created_at as createdAt, last_login_at as lastLoginAt FROM users ORDER BY created_at ASC").all();
+  const users = db.prepare("SELECT id, email, name, role, created_at as createdAt, last_login_at as lastLoginAt FROM users ORDER BY created_at ASC").all();
   const access = db
     .prepare(
       `SELECT pa.email, pa.role, p.name as profileName FROM profile_access pa
@@ -496,6 +455,30 @@ app.put("/api/admin/users/:userId/role", requireAdmin, (req, res) => {
   const user = db.prepare("SELECT id FROM users WHERE id = ?").get(userId);
   if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
   db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, userId);
+  res.json({ ok: true });
+});
+
+app.post("/api/admin/users", requireAdmin, (req, res) => {
+  const { email, name, password, role } = req.body || {};
+  const norm = (email || "").trim().toLowerCase();
+  if (!norm || !norm.includes("@")) return res.status(400).json({ error: "Informe um e-mail válido." });
+  if (!password || password.length < 4) return res.status(400).json({ error: "A senha precisa ter ao menos 4 caracteres." });
+  const existing = db.prepare("SELECT id FROM users WHERE email = ?").get(norm);
+  if (existing) return res.status(409).json({ error: "Já existe uma conta com esse e-mail." });
+  const id = crypto.randomUUID();
+  db.prepare("INSERT INTO users (id, email, name, password_hash, role, created_at) VALUES (?,?,?,?,?,?)").run(
+    id, norm, (name || "").trim(), hashPassword(password), role === "admin" ? "admin" : "member", Date.now()
+  );
+  res.json({ id, email: norm, name: (name || "").trim(), role: role === "admin" ? "admin" : "member" });
+});
+
+app.put("/api/admin/users/:userId/set-password", requireAdmin, (req, res) => {
+  const { userId } = req.params;
+  const { password } = req.body || {};
+  if (!password || password.length < 4) return res.status(400).json({ error: "A senha precisa ter ao menos 4 caracteres." });
+  const user = db.prepare("SELECT id FROM users WHERE id = ?").get(userId);
+  if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
+  db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(password), userId);
   res.json({ ok: true });
 });
 
