@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-23e · Botão 'Catálogo de exames' virou 'Unificar exames' e foi movido pro topo do perfil, visível em qualquer aba (antes só aparecia na aba Exames)";
+const APP_BUILD = "2026-07-23i · Novo recurso: Desafios entre perfis. Criar/aceitar convites fica dentro de Editar perfil (lápis); acompanhamento do ranking tem um novo card no Painel";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -439,6 +439,7 @@ export default function App() {
         profiles.find((p) => p.id === screen.profileId) ? (
           <ProfileScreen
             profile={profiles.find((p) => p.id === screen.profileId)}
+            allProfiles={profiles}
             initialTab={screen.initialTab}
             onBack={() => setScreen({ name: "home" })}
             onProfileUpdate={updateProfileInfo}
@@ -578,7 +579,7 @@ function AddProfileModal({ onClose, onConfirm }) {
       />
       <div className="grid grid-cols-3 gap-3 mb-1">
         <div>
-          <label className="text-xs text-slate-500 mb-1 block">Data de nascimento</label>
+          <label className="text-xs text-slate-500 mb-1 block">Nascimento</label>
           <input
             type="date"
             value={birthDate}
@@ -666,7 +667,7 @@ function AddProfileModal({ onClose, onConfirm }) {
   );
 }
 
-function EditProfileModal({ profile, onClose, onSave }) {
+function EditProfileModal({ profile, allProfiles, onClose, onSave, onOpenCatalog }) {
   const [name, setName] = useState(profile.name || "");
   const [birthDate, setBirthDate] = useState(profile.birthDate || "");
   const [gender, setGender] = useState(profile.gender || "");
@@ -676,6 +677,40 @@ function EditProfileModal({ profile, onClose, onSave }) {
   const [hereditaryConditions, setHereditaryConditions] = useState(Array.isArray(profile.hereditaryConditions) ? profile.hereditaryConditions : []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+
+  const [challenges, setChallenges] = useState(null);
+  const [showCreateChallenge, setShowCreateChallenge] = useState(false);
+  const [challengeError, setChallengeError] = useState(null);
+
+  const loadChallenges = useCallback(async () => {
+    try {
+      setChallenges(await api.getChallenges(profile.id));
+    } catch (e) {
+      setChallenges([]);
+    }
+  }, [profile.id]);
+
+  useEffect(() => { loadChallenges(); }, [loadChallenges]);
+
+  const respondInvite = async (challengeId, accept) => {
+    setChallengeError(null);
+    try {
+      await api.respondChallenge(challengeId, profile.id, accept);
+      await loadChallenges();
+    } catch (e) {
+      setChallengeError(e.message || "Erro ao responder convite");
+    }
+  };
+
+  const cancelChallenge = async (challengeId) => {
+    setChallengeError(null);
+    try {
+      await api.deleteChallenge(challengeId, profile.id);
+      await loadChallenges();
+    } catch (e) {
+      setChallengeError(e.message || "Erro ao cancelar desafio");
+    }
+  };
 
   const toggleCondition = (c) => {
     setHereditaryConditions((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
@@ -701,6 +736,7 @@ function EditProfileModal({ profile, onClose, onSave }) {
   };
 
   return (
+    <>
     <ModalShell onClose={onClose} title="Editar perfil">
       <label className="text-xs text-slate-500 mb-1 block">Nome da pessoa</label>
       <input
@@ -711,7 +747,7 @@ function EditProfileModal({ profile, onClose, onSave }) {
       />
       <div className="grid grid-cols-3 gap-3 mb-2">
         <div>
-          <label className="text-xs text-slate-500 mb-1 block">Data de nascimento</label>
+          <label className="text-xs text-slate-500 mb-1 block">Nascimento</label>
           <input
             type="date"
             value={birthDate}
@@ -791,6 +827,96 @@ function EditProfileModal({ profile, onClose, onSave }) {
         ))}
       </div>
 
+      <div className="border-t border-slate-100 pt-4 mb-4">
+        <button
+          type="button"
+          onClick={onOpenCatalog}
+          className="w-full flex items-center justify-between gap-2 text-sm text-slate-700 border border-slate-200 rounded-lg px-3.5 py-2.5 hover:bg-slate-50"
+        >
+          <span className="flex items-center gap-1.5"><ClipboardEdit size={15} className="text-slate-400" /> Unificar exames</span>
+          <ChevronRight size={15} className="text-slate-400" />
+        </button>
+        <p className="text-xs text-slate-400 mt-1.5">Unifica exames com nomes diferentes entre laboratórios e define uma referência única para cada um.</p>
+      </div>
+
+      <div className="border-t border-slate-100 pt-4 mb-4">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-sm font-medium text-slate-700 flex items-center gap-1.5">
+            <TrendingUp size={15} className="text-slate-400" /> Desafios
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowCreateChallenge(true)}
+            className="text-xs px-2.5 py-1.5 rounded-md bg-slate-900 text-white hover:bg-slate-800 flex items-center gap-1"
+          >
+            <Plus size={12} /> Criar desafio
+          </button>
+        </div>
+
+        {challengeError && (
+          <div className="mb-2 flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-2.5 py-2">
+            <AlertTriangle size={13} className="mt-0.5 shrink-0" /> {challengeError}
+          </div>
+        )}
+
+        {challenges === null ? (
+          <div className="flex justify-center py-4 text-slate-400"><Loader2 className="animate-spin" size={16} /></div>
+        ) : (
+          <>
+            {challenges.filter((c) => c.participants.find((p) => p.profileId === profile.id)?.status === "invited").length > 0 && (
+              <div className="space-y-1.5 mb-2">
+                {challenges
+                  .filter((c) => c.participants.find((p) => p.profileId === profile.id)?.status === "invited")
+                  .map((c) => (
+                    <div key={c.id} className="border border-amber-200 bg-amber-50 rounded-lg px-3 py-2">
+                      <p className="text-sm text-slate-800">{c.title}</p>
+                      <p className="text-xs text-slate-500 mb-1.5">
+                        {c.metricLabel} · {fmtDate(c.startDate)} a {fmtDate(c.endDate)}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => respondInvite(c.id, true)} className="text-xs px-2.5 py-1 rounded-md bg-emerald-600 text-white hover:bg-emerald-700">Aceitar</button>
+                        <button onClick={() => respondInvite(c.id, false)} className="text-xs px-2.5 py-1 rounded-md text-slate-500 hover:bg-slate-100">Recusar</button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            {challenges.filter((c) => c.participants.find((p) => p.profileId === profile.id)?.status === "accepted").length === 0 ? (
+              <p className="text-xs text-slate-400">Nenhum desafio ativo.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {challenges
+                  .filter((c) => c.participants.find((p) => p.profileId === profile.id)?.status === "accepted")
+                  .map((c) => {
+                    const ranked = c.participants.filter((p) => p.status === "accepted" && p.rank).sort((a, b) => a.rank - b.rank);
+                    const statusLabel = c.status === "upcoming" ? "Ainda não começou" : c.status === "finished" ? "Encerrado" : "Em andamento";
+                    return (
+                      <div key={c.id} className="border border-slate-200 rounded-lg px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm text-slate-800">{c.title}</p>
+                          {c.createdByProfileId === profile.id && (
+                            <button onClick={() => cancelChallenge(c.id)} className="text-slate-300 hover:text-red-500"><Trash2 size={13} /></button>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 mb-1.5">{c.metricLabel} · {fmtDate(c.startDate)} a {fmtDate(c.endDate)} · {statusLabel}</p>
+                        <div className="space-y-0.5">
+                          {ranked.map((p) => (
+                            <p key={p.profileId} className="text-xs text-slate-600 flex items-center justify-between">
+                              <span>{p.rank}º {p.profileName}{p.profileId === profile.id ? " (você)" : ""}</span>
+                              <span className="text-slate-400">{p.currentValue}{c.unit} ({p.pctChange > 0 ? "+" : ""}{Math.round(p.pctChange * 10) / 10}%)</span>
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
       {error && (
         <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
@@ -806,6 +932,207 @@ function EditProfileModal({ profile, onClose, onSave }) {
           {saving && <Loader2 size={14} className="animate-spin" />}
           {saving ? "Salvando..." : "Salvar"}
         </button>
+      </div>
+    </ModalShell>
+    {showCreateChallenge && (
+      <CreateChallengeModal
+        profile={profile}
+        allProfiles={allProfiles}
+        onClose={() => setShowCreateChallenge(false)}
+        onCreated={async () => { setShowCreateChallenge(false); await loadChallenges(); }}
+      />
+    )}
+    </>
+  );
+}
+
+function CreateChallengeModal({ profile, allProfiles, onClose, onCreated }) {
+  const [metrics, setMetrics] = useState(null);
+  const [metric, setMetric] = useState("");
+  const [direction, setDirection] = useState("lower");
+  const [title, setTitle] = useState("");
+  const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
+  const [endDate, setEndDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return d.toISOString().slice(0, 10);
+  });
+  const [selectedParticipants, setSelectedParticipants] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    api.getChallengeMetrics().then((m) => {
+      setMetrics(m);
+      if (m.length > 0) {
+        setMetric(m[0].key);
+        setDirection(m[0].defaultDirection);
+        setTitle(`Desafio de ${m[0].label.toLowerCase()}`);
+      }
+    });
+  }, []);
+
+  const otherProfiles = (allProfiles || []).filter((p) => p.id !== profile.id);
+
+  const handleMetricChange = (key) => {
+    setMetric(key);
+    const m = (metrics || []).find((x) => x.key === key);
+    if (m) {
+      setDirection(m.defaultDirection);
+      setTitle(`Desafio de ${m.label.toLowerCase()}`);
+    }
+  };
+
+  const toggleParticipant = (id) => {
+    setSelectedParticipants((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const handleCreate = async () => {
+    if (!metric || !title.trim() || !startDate || !endDate) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.createChallenge({
+        createdByProfileId: profile.id, title: title.trim(), metric, direction, startDate, endDate,
+        participantProfileIds: selectedParticipants,
+      });
+      await onCreated();
+    } catch (e) {
+      setError(e.message || "Erro ao criar desafio");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const selectedMetric = (metrics || []).find((m) => m.key === metric);
+
+  return (
+    <ModalShell onClose={onClose} title="Criar desafio">
+      {metrics === null ? (
+        <div className="flex justify-center py-8 text-slate-400"><Loader2 className="animate-spin" size={20} /></div>
+      ) : (
+        <>
+          <label className="text-xs text-slate-500 mb-1 block">Título do desafio</label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-300"
+          />
+
+          <label className="text-xs text-slate-500 mb-1 block">O que vai ser disputado</label>
+          <select value={metric} onChange={(e) => handleMetricChange(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm mb-3">
+            {metrics.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+          </select>
+
+          <label className="text-xs text-slate-500 mb-1.5 block">Quem vence</label>
+          <div className="flex items-center gap-3 mb-4 text-sm">
+            <label className="flex items-center gap-1.5">
+              <input type="radio" checked={direction === "lower"} onChange={() => setDirection("lower")} /> Quem reduzir mais
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input type="radio" checked={direction === "higher"} onChange={() => setDirection("higher")} /> Quem aumentar mais
+            </label>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Início</label>
+              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Fim</label>
+              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+            </div>
+          </div>
+
+          <label className="text-xs text-slate-500 mb-1.5 block">Convidar</label>
+          {otherProfiles.length === 0 ? (
+            <p className="text-xs text-slate-400 mb-4">Não há outros perfis pra convidar ainda.</p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5 mb-4">
+              {otherProfiles.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => toggleParticipant(p.id)}
+                  className={`text-xs px-2.5 py-1.5 rounded-full border transition ${
+                    selectedParticipants.includes(p.id) ? "bg-slate-900 border-slate-900 text-white" : "border-slate-300 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <p className="text-xs text-slate-400 mb-4">
+            Você entra automaticamente no desafio. {selectedMetric ? `O ranking usa a variação percentual de "${selectedMetric.label.toLowerCase()}" registrada na aba Saúde física de cada pessoa.` : ""}
+          </p>
+
+          {error && (
+            <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
+            <button
+              disabled={!title.trim() || saving}
+              onClick={handleCreate}
+              className="flex items-center gap-1.5 text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
+            >
+              {saving && <Loader2 size={14} className="animate-spin" />}
+              {saving ? "Criando..." : "Criar desafio"}
+            </button>
+          </div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
+function ChallengeDetailModal({ challenge, profileId, onClose }) {
+  const ranked = challenge.participants.filter((p) => p.status === "accepted" && p.rank).sort((a, b) => a.rank - b.rank);
+  const pending = challenge.participants.filter((p) => p.status === "accepted" && !p.rank);
+  const statusLabel = challenge.status === "upcoming" ? "Ainda não começou" : challenge.status === "finished" ? "Encerrado" : "Em andamento";
+  const daysLeft = Math.ceil((new Date(challenge.endDate) - new Date()) / (1000 * 60 * 60 * 24));
+
+  return (
+    <ModalShell onClose={onClose} title={challenge.title}>
+      <p className="text-xs text-slate-400 mb-4">
+        {challenge.metricLabel} · {fmtDate(challenge.startDate)} a {fmtDate(challenge.endDate)} · {statusLabel}
+        {challenge.status === "active" && daysLeft >= 0 ? ` · ${daysLeft} dia${daysLeft !== 1 ? "s" : ""} restante${daysLeft !== 1 ? "s" : ""}` : ""}
+      </p>
+
+      {ranked.length === 0 ? (
+        <p className="text-sm text-slate-400 mb-2">Ninguém registrou uma medição ainda.</p>
+      ) : (
+        <div className="space-y-2 mb-2">
+          {ranked.map((p) => (
+            <div key={p.profileId} className={`flex items-center justify-between px-3 py-2.5 rounded-lg border ${p.rank === 1 ? "border-amber-200 bg-amber-50" : "border-slate-200"}`}>
+              <span className="text-sm text-slate-800 flex items-center gap-1.5">
+                {p.rank === 1 ? "🏆" : `${p.rank}º`} {p.profileName}{p.profileId === profileId ? " (você)" : ""}
+              </span>
+              <span className="text-sm text-slate-600">
+                {p.currentValue}{challenge.unit}
+                <span className={`ml-2 text-xs ${p.pctChange > 0 ? "text-amber-600" : p.pctChange < 0 ? "text-emerald-600" : "text-slate-400"}`}>
+                  ({p.pctChange > 0 ? "+" : ""}{Math.round(p.pctChange * 10) / 10}%)
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {pending.length > 0 && (
+        <p className="text-xs text-slate-400 mb-2">
+          Aguardando primeira medição: {pending.map((p) => p.profileName).join(", ")}
+        </p>
+      )}
+
+      <div className="flex justify-end mt-3">
+        <button onClick={onClose} className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800">Fechar</button>
       </div>
     </ModalShell>
   );
@@ -911,7 +1238,7 @@ function ImportModal({ onClose, onDone }) {
   );
 }
 
-function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
+function ProfileScreen({ profile, allProfiles, onBack, initialTab, onProfileUpdate }) {
   const [index, setIndex] = useState(null);
   const [batches, setBatches] = useState({});
   const [uploading, setUploading] = useState(false);
@@ -927,6 +1254,7 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
   const [pendingInvoiceReview, setPendingInvoiceReview] = useState(null); // { data, uploadId } pra Notas fiscais
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const fileInputRef = useRef(null);
+  const photoInputRef = useRef(null);
 
   // Troca de aba "normal" (clique direto na aba): sempre limpa o filtro de exames
   // vindo dos cards do Painel, pra não ficar um filtro "escondido" ativo.
@@ -978,6 +1306,7 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
       base64: detail.base64,
       fileName: detail.fileName,
       hash: detail.hash,
+      mime: detail.mime,
     });
     setReviewFromWaId(uploadId);
     goToTab("exames");
@@ -1021,7 +1350,7 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
     setUploading(true);
     try {
       if (file.size > 8 * 1024 * 1024) {
-        throw new Error("Esse PDF passa de 8MB — tente um arquivo menor ou exporte novamente com menos páginas.");
+        throw new Error("Esse arquivo passa de 8MB — tente um arquivo menor (ou uma foto com menos resolução).");
       }
       const parsed = await api.extractPdf(profile.id, file);
       const results = (parsed.e || []).map((r) => ({
@@ -1036,12 +1365,13 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
         base64: parsed.base64,
         fileName: parsed.fileName,
         hash: parsed.hash,
+        mime: parsed.mime,
       });
     } catch (e) {
       if (e.duplicate) {
         setUploadError(`Esse arquivo já foi importado antes (laudo de ${fmtDate(e.dupInfo.date)}, ${compactLabName(e.dupInfo.lab) || "sem lab informado"}). Não vou importar de novo para não duplicar exames no histórico.`);
       } else {
-        setUploadError(e.message || "Não consegui ler esse PDF. Tente novamente ou adicione os exames manualmente.");
+        setUploadError(e.message || "Não consegui ler esse arquivo. Tente novamente, tente uma foto mais nítida, ou adicione os exames manualmente.");
       }
     } finally {
       setUploading(false);
@@ -1050,7 +1380,7 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
 
   const saveBatch = async (data) => {
     const { batchId } = await api.saveBatch(profile.id, {
-      date: data.date, lab: data.lab, doctor: data.doctor, results: data.results, base64: data.base64, fileName: data.fileName, hash: data.hash,
+      date: data.date, lab: data.lab, doctor: data.doctor, results: data.results, base64: data.base64, fileName: data.fileName, hash: data.hash, mime: data.mime,
     });
     const newIndexEntry = { batchId, date: data.date, lab: data.lab, doctor: data.doctor, count: data.results.length, hash: data.hash };
     setIndex((prev) => [...(prev || []), newIndexEntry].sort((a, b) => (b.date || "").localeCompare(a.date || "")));
@@ -1113,15 +1443,17 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setCatalogModalOpen(true)} className="flex items-center gap-1.5 text-slate-600 text-sm font-medium px-3.5 py-2 rounded-lg border border-slate-200 hover:bg-slate-50">
-            <ClipboardEdit size={15} /> Unificar exames
-          </button>
           {tab === "exames" && (
             <>
               <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
               <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
                 {uploading ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
                 {uploading ? "Lendo PDF..." : "Enviar PDF de exame"}
+              </button>
+              <input ref={photoInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
+              <button onClick={() => photoInputRef.current?.click()} disabled={uploading} className="flex items-center gap-1.5 text-slate-600 text-sm font-medium px-3.5 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-50">
+                {uploading ? <Loader2 size={15} className="animate-spin" /> : <Camera size={15} />}
+                {uploading ? "Lendo foto..." : "Foto do exame"}
               </button>
             </>
           )}
@@ -1185,6 +1517,7 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
           profileId={profile.id}
           profileName={profile.name}
           profile={profile}
+          allProfiles={allProfiles}
           onGoTo={goToTabWithFilter}
         />
       )}
@@ -1232,7 +1565,7 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
       {mergedResults.length === 0 ? (
         <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
           <FileText size={28} className="mx-auto mb-2" />
-          <p className="text-sm">Nenhum exame ainda. Envie o primeiro PDF de laudo para começar.</p>
+          <p className="text-sm">Nenhum exame ainda. Envie o PDF ou uma foto do primeiro laudo para começar.</p>
         </div>
       ) : filteredExamResults.length === 0 ? (
         <div className="border border-dashed border-slate-300 rounded-xl py-14 text-center text-slate-400">
@@ -1252,7 +1585,15 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
       )}
 
       {catalogModalOpen && <ExamCatalogModal onClose={() => setCatalogModalOpen(false)} onChanged={load} />}
-      {editProfileOpen && <EditProfileModal profile={profile} onClose={() => setEditProfileOpen(false)} onSave={saveProfileEdit} />}
+      {editProfileOpen && (
+        <EditProfileModal
+          profile={profile}
+          allProfiles={allProfiles}
+          onClose={() => setEditProfileOpen(false)}
+          onSave={saveProfileEdit}
+          onOpenCatalog={() => { setEditProfileOpen(false); setCatalogModalOpen(true); }}
+        />
+      )}
 
       {waInboxOpen && (
         <WhatsAppInboxModal
@@ -1773,7 +2114,7 @@ function ReviewModal({ data, onCancel, onConfirm }) {
         <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
         <button
           disabled={!date || results.length === 0}
-          onClick={() => onConfirm({ date, lab, doctor, results, base64: data.base64, fileName: data.fileName, hash: data.hash })}
+          onClick={() => onConfirm({ date, lab, doctor, results, base64: data.base64, fileName: data.fileName, hash: data.hash, mime: data.mime })}
           className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
         >
           Salvar no histórico
@@ -3269,13 +3610,15 @@ function DashboardCard({ title, onClick, children }) {
   );
 }
 
-function DashboardScreen({ profileId, profileName, profile, onGoTo }) {
+function DashboardScreen({ profileId, profileName, profile, allProfiles, onGoTo }) {
   const [loading, setLoading] = useState(true);
   const [index, setIndex] = useState([]);
   const [batches, setBatches] = useState({});
   const [bodyEntries, setBodyEntries] = useState([]);
   const [symptoms, setSymptoms] = useState([]);
   const [activities, setActivities] = useState([]);
+  const [challenges, setChallenges] = useState([]);
+  const [openChallenge, setOpenChallenge] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -3283,16 +3626,18 @@ function DashboardScreen({ profileId, profileName, profile, onGoTo }) {
       const idx = await api.getBatchIndex(profileId);
       const loadedBatches = {};
       await Promise.all(idx.map(async (b) => { loadedBatches[b.batchId] = await api.getBatch(profileId, b.batchId); }));
-      const [body, syms, acts] = await Promise.all([
+      const [body, syms, acts, chals] = await Promise.all([
         api.getBodyEntries(profileId),
         api.getSymptoms(profileId),
         api.getActivities(profileId),
+        api.getChallenges(profileId).catch(() => []),
       ]);
       setIndex(idx);
       setBatches(loadedBatches);
       setBodyEntries(body);
       setSymptoms(syms);
       setActivities(acts);
+      setChallenges(chals.filter((c) => c.participants.find((p) => p.profileId === profileId)?.status === "accepted"));
       setLoading(false);
     })();
   }, [profileId]);
@@ -3451,7 +3796,29 @@ function DashboardScreen({ profileId, profileName, profile, onGoTo }) {
             </div>
           )}
         </DashboardCard>
+
+        {challenges.length > 0 && (() => {
+          const featured = challenges[0];
+          const ranked = featured.participants.filter((p) => p.status === "accepted" && p.rank).sort((a, b) => a.rank - b.rank);
+          const leader = ranked[0];
+          const statusLabel = featured.status === "upcoming" ? "Ainda não começou" : featured.status === "finished" ? "Encerrado" : "Em andamento";
+          return (
+            <DashboardCard title="Desafios" onClick={() => setOpenChallenge(featured)}>
+              <p className="text-sm font-medium text-slate-800 truncate mb-1">{featured.title}</p>
+              <p className="text-xs text-slate-400 mb-2">{statusLabel}{challenges.length > 1 ? ` · +${challenges.length - 1} outro${challenges.length - 1 !== 1 ? "s" : ""}` : ""}</p>
+              {leader ? (
+                <p className="text-xs text-slate-600">🏆 {leader.profileName}{leader.profileId === profileId ? " (você)" : ""} · {leader.pctChange > 0 ? "+" : ""}{Math.round(leader.pctChange * 10) / 10}%</p>
+              ) : (
+                <p className="text-xs text-slate-400">Aguardando primeiras medições</p>
+              )}
+            </DashboardCard>
+          );
+        })()}
       </div>
+
+      {openChallenge && (
+        <ChallengeDetailModal challenge={openChallenge} profileId={profileId} onClose={() => setOpenChallenge(null)} />
+      )}
 
       {!latestBatchMeta && !latestBody && !activeSymptoms.length && weeklyMinutes === 0 && (
         <p className="text-sm text-slate-400 text-center mt-6">

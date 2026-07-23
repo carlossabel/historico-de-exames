@@ -240,7 +240,8 @@ no momento da importação de um laudo novo.
 - **Ao importar um laudo** (PDF manual ou pelo WhatsApp), a tela de revisão continua como
   antes: só os campos do próprio laudo (nome, valor, unidade, referência, status), sem
   nenhuma sugestão de padronização.
-- **A tela "Unificar exames"** (botão no topo do perfil, visível em qualquer aba) é onde a
+- **A tela "Unificar exames"** (dentro de "Editar perfil" — ícone de lápis ao lado do
+  nome do perfil) é onde a
   padronização acontece, com duas partes:
   - **Unificar existentes**: lista os nomes de exames já salvos que ainda não estão
     padronizados. Um botão "Sugerir agrupamentos com IA" analisa essa lista e propõe quais
@@ -253,6 +254,30 @@ no momento da importação de um laudo novo.
     remoção.
 - O nome e a referência originais de cada laudo continuam guardados (não se perdem) mesmo
   depois de padronizados, para eventual conferência.
+
+## Desafios entre perfis
+
+Permite criar competições amigáveis entre os perfis da casa em cima de um indicador de
+saúde física (ex: "quem perde mais peso em 30 dias", "quem ganha mais massa muscular").
+
+- **Criar um desafio ou responder a um convite** fica dentro de **Editar perfil** (ícone
+  de lápis ao lado do nome). Lá tem uma seção "Desafios" com: convites pendentes (Aceitar
+  / Recusar), a lista dos seus desafios ativos com um resumo do ranking, e um botão
+  "Criar desafio".
+- **Ao criar um desafio**, você escolhe: um título, qual métrica de saúde física entra em
+  disputa (peso, % de gordura, massa muscular, gordura visceral, massa óssea, água
+  corporal, proteína corporal ou frequência cardíaca de repouso), se quem vence é quem
+  **reduz mais** ou quem **aumenta mais** aquele valor, o período (início/fim), e quem
+  mais vai participar (você entra automaticamente).
+- **O ranking é calculado automaticamente**: ao aceitar um convite, o valor mais recente
+  daquela métrica na aba "Saúde física" da pessoa vira o ponto de partida; a posição no
+  ranking é a variação percentual desde então (positiva ou negativa, dependendo da
+  direção escolhida). Continuar registrando medições em "Saúde física" atualiza o ranking
+  automaticamente — não precisa fazer nada a mais dentro do desafio.
+- **Acompanhar o resultado**: um novo card "Desafios" aparece no Painel de cada
+  participante, mostrando quem está na frente; clicar nele abre o ranking completo, com
+  o valor atual, a variação percentual de cada pessoa e quantos dias faltam para o fim.
+- Só quem criou o desafio pode cancelá-lo (isso remove o desafio pra todo mundo).
 
 ## Estrutura
 

@@ -219,6 +219,32 @@ CREATE INDEX IF NOT EXISTS idx_activities_profile ON activities(profile_id);
 CREATE INDEX IF NOT EXISTS idx_exam_explanations_profile_exam ON exam_explanations(profile_id, exam_name);
 CREATE INDEX IF NOT EXISTS idx_invoices_profile ON invoices(profile_id);
 CREATE INDEX IF NOT EXISTS idx_whatsapp_uploads_profile ON whatsapp_uploads(profile_id);
+
+-- Desafios de saúde física entre perfis (ex: "quem perde mais peso em 30 dias").
+CREATE TABLE IF NOT EXISTS challenges (
+  id TEXT PRIMARY KEY,
+  created_by_profile_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  direction TEXT NOT NULL, -- 'lower' (menor valor vence) | 'higher' (maior valor vence)
+  start_date TEXT NOT NULL,
+  end_date TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS challenge_participants (
+  id TEXT PRIMARY KEY,
+  challenge_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'invited', -- 'invited' | 'accepted' | 'declined'
+  baseline_value REAL,
+  baseline_date TEXT,
+  invited_at INTEGER NOT NULL,
+  responded_at INTEGER,
+  UNIQUE(challenge_id, profile_id)
+);
+CREATE INDEX IF NOT EXISTS idx_challenge_participants_challenge ON challenge_participants(challenge_id);
+CREATE INDEX IF NOT EXISTS idx_challenge_participants_profile ON challenge_participants(profile_id);
 `);
 
 // Migração leve: bancos criados antes do Strava/Apple Watch só tinham as colunas
@@ -238,6 +264,9 @@ db.exec(
 const batchesCols = db.prepare("PRAGMA table_info(batches)").all().map((c) => c.name);
 if (!batchesCols.includes("doctor")) {
   db.exec("ALTER TABLE batches ADD COLUMN doctor TEXT");
+}
+if (!batchesCols.includes("file_mime")) {
+  db.exec("ALTER TABLE batches ADD COLUMN file_mime TEXT");
 }
 
 const bodyEntriesCols = db.prepare("PRAGMA table_info(body_entries)").all().map((c) => c.name);

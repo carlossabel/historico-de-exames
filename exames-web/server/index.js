@@ -279,11 +279,13 @@ app.get("/api/profiles/:profileId/batches/:batchId", (req, res) => {
 
 app.get("/api/profiles/:profileId/batches/:batchId/pdf", (req, res) => {
   const { batchId } = req.params;
-  const batch = db.prepare("SELECT pdf_filename as fileName FROM batches WHERE id = ?").get(batchId);
-  const pdfPath = path.join(pdfDir, `${batchId}.pdf`);
-  if (!batch || !fs.existsSync(pdfPath)) return res.status(404).json({ error: "PDF não encontrado" });
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `inline; filename="${(batch.fileName || "exame.pdf").replace(/"/g, "")}"`);
+  const batch = db.prepare("SELECT pdf_filename as fileName, file_mime as fileMime FROM batches WHERE id = ?").get(batchId);
+  if (!batch) return res.status(404).json({ error: "Arquivo não encontrado" });
+  const mime = batch.fileMime || "application/pdf";
+  const pdfPath = path.join(pdfDir, `${batchId}.${extFromMime(mime)}`);
+  if (!fs.existsSync(pdfPath)) return res.status(404).json({ error: "Arquivo não encontrado" });
+  res.setHeader("Content-Type", mime);
+  res.setHeader("Content-Disposition", `inline; filename="${(batch.fileName || "exame").replace(/"/g, "")}"`);
   fs.createReadStream(pdfPath).pipe(res);
 });
 
@@ -716,6 +718,160 @@ app.delete("/api/profiles/:profileId/body-entries/:entryId", (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Desafios de saúde física entre perfis ----------
+// Métricas disponíveis pra criar um desafio, mapeadas pra coluna de body_entries e com uma
+// direção padrão (qual sentido de mudança conta como "melhor performance") — o usuário pode
+// trocar a direção na hora de criar (ex: um desafio de "quem ganha mais massa muscular").
+const CHALLENGE_METRICS = {
+  weightKg: { label: "Peso", column: "weight_kg", unit: "kg", defaultDirection: "lower" },
+  bodyFatPct: { label: "% de gordura corporal", column: "body_fat_pct", unit: "%", defaultDirection: "lower" },
+  muscleMassKg: { label: "Massa muscular", column: "muscle_mass_kg", unit: "kg", defaultDirection: "higher" },
+  visceralFat: { label: "Gordura visceral", column: "visceral_fat", unit: "", defaultDirection: "lower" },
+  boneMassKg: { label: "Massa óssea", column: "bone_mass_kg", unit: "kg", defaultDirection: "higher" },
+  bodyWaterPct: { label: "Água corporal", column: "body_water_pct", unit: "%", defaultDirection: "higher" },
+  proteinPct: { label: "Proteína corporal", column: "protein_pct", unit: "%", defaultDirection: "higher" },
+  restingHeartRate: { label: "Frequência cardíaca de repouso", column: "resting_heart_rate", unit: "bpm", defaultDirection: "lower" },
+};
+
+app.get("/api/challenge-metrics", (req, res) => {
+  res.json(Object.entries(CHALLENGE_METRICS).map(([key, m]) => ({ key, ...m })));
+});
+
+function getLatestMetricValue(profileId, column) {
+  const row = db
+    .prepare(`SELECT date, ${column} as value FROM body_entries WHERE profile_id = ? AND ${column} IS NOT NULL ORDER BY date DESC, saved_at DESC LIMIT 1`)
+    .get(profileId);
+  return row ? { value: row.value, date: row.date } : null;
+}
+
+// Monta o desafio completo (participantes + ranking calculado na hora, a partir das
+// medições de saúde física mais recentes de cada um) pra exibir no card do painel ou na
+// tela de gerenciamento dentro de "editar perfil".
+function hydrateChallenge(challenge) {
+  const metricDef = CHALLENGE_METRICS[challenge.metric] || {};
+  const participants = db
+    .prepare(
+      `SELECT cp.id, cp.profile_id as profileId, cp.status, cp.baseline_value as baselineValue, cp.baseline_date as baselineDate,
+              p.name as profileName, p.color_idx as profileColorIdx
+       FROM challenge_participants cp JOIN profiles p ON p.id = cp.profile_id
+       WHERE cp.challenge_id = ?`
+    )
+    .all(challenge.id)
+    .map((p) => {
+      if (p.status !== "accepted" || p.baselineValue === null || p.baselineValue === undefined) {
+        return { ...p, currentValue: null, delta: null, pctChange: null, score: null };
+      }
+      const latest = getLatestMetricValue(p.profileId, metricDef.column);
+      const currentValue = latest ? latest.value : p.baselineValue;
+      const delta = currentValue - p.baselineValue;
+      const pctChange = p.baselineValue !== 0 ? (delta / Math.abs(p.baselineValue)) * 100 : delta;
+      const score = challenge.direction === "lower" ? -pctChange : pctChange;
+      return { ...p, currentValue, delta, pctChange, score };
+    });
+
+  const ranked = participants
+    .filter((p) => p.status === "accepted" && p.score !== null)
+    .sort((a, b) => b.score - a.score);
+  ranked.forEach((p, i) => { p.rank = i + 1; });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const status = today < challenge.start_date ? "upcoming" : today > challenge.end_date ? "finished" : "active";
+
+  return {
+    id: challenge.id,
+    createdByProfileId: challenge.created_by_profile_id,
+    title: challenge.title,
+    metric: challenge.metric,
+    metricLabel: metricDef.label || challenge.metric,
+    unit: metricDef.unit || "",
+    direction: challenge.direction,
+    startDate: challenge.start_date,
+    endDate: challenge.end_date,
+    status,
+    participants,
+  };
+}
+
+app.post("/api/challenges", (req, res) => {
+  try {
+    const { createdByProfileId, title, metric, direction, startDate, endDate, participantProfileIds } = req.body || {};
+    if (!createdByProfileId || !CHALLENGE_METRICS[metric] || !startDate || !endDate) {
+      return res.status(400).json({ error: "Preencha a métrica e as datas do desafio." });
+    }
+    if (endDate < startDate) return res.status(400).json({ error: "A data final não pode ser antes da data inicial." });
+    const ids = Array.isArray(participantProfileIds) ? [...new Set(participantProfileIds.filter((id) => id && id !== createdByProfileId))] : [];
+
+    const challengeId = uid();
+    const now = Date.now();
+    const metricDef = CHALLENGE_METRICS[metric];
+    db.prepare(
+      "INSERT INTO challenges (id, created_by_profile_id, title, metric, direction, start_date, end_date, created_at) VALUES (?,?,?,?,?,?,?,?)"
+    ).run(challengeId, createdByProfileId, (title || metricDef.label).trim(), metric, direction === "higher" ? "higher" : "lower", startDate, endDate, now);
+
+    const creatorBaseline = getLatestMetricValue(createdByProfileId, metricDef.column);
+    db.prepare(
+      "INSERT INTO challenge_participants (id, challenge_id, profile_id, status, baseline_value, baseline_date, invited_at, responded_at) VALUES (?,?,?,?,?,?,?,?)"
+    ).run(uid(), challengeId, createdByProfileId, "accepted", creatorBaseline?.value ?? null, creatorBaseline?.date ?? null, now, now);
+
+    const insertInvite = db.prepare(
+      "INSERT INTO challenge_participants (id, challenge_id, profile_id, status, baseline_value, baseline_date, invited_at, responded_at) VALUES (?,?,?,?,?,?,?,?)"
+    );
+    for (const pid of ids) {
+      insertInvite.run(uid(), challengeId, pid, "invited", null, null, now, null);
+    }
+
+    res.json({ challengeId });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao criar desafio" });
+  }
+});
+
+app.get("/api/profiles/:profileId/challenges", (req, res) => {
+  const { profileId } = req.params;
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT c.* FROM challenges c JOIN challenge_participants cp ON cp.challenge_id = c.id
+       WHERE cp.profile_id = ? ORDER BY c.created_at DESC`
+    )
+    .all(profileId);
+  res.json(rows.map(hydrateChallenge));
+});
+
+app.post("/api/challenges/:id/respond", (req, res) => {
+  try {
+    const { id } = req.params;
+    const { profileId, accept } = req.body || {};
+    const challenge = db.prepare("SELECT * FROM challenges WHERE id = ?").get(id);
+    if (!challenge) return res.status(404).json({ error: "Desafio não encontrado" });
+    const participant = db.prepare("SELECT * FROM challenge_participants WHERE challenge_id = ? AND profile_id = ?").get(id, profileId);
+    if (!participant) return res.status(404).json({ error: "Convite não encontrado" });
+
+    if (accept) {
+      const metricDef = CHALLENGE_METRICS[challenge.metric];
+      const baseline = getLatestMetricValue(profileId, metricDef.column);
+      db.prepare("UPDATE challenge_participants SET status='accepted', baseline_value=?, baseline_date=?, responded_at=? WHERE id=?").run(
+        baseline?.value ?? null, baseline?.date ?? null, Date.now(), participant.id
+      );
+    } else {
+      db.prepare("UPDATE challenge_participants SET status='declined', responded_at=? WHERE id=?").run(Date.now(), participant.id);
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao responder convite" });
+  }
+});
+
+app.delete("/api/challenges/:id", (req, res) => {
+  const { id } = req.params;
+  const { profileId } = req.body || {};
+  const challenge = db.prepare("SELECT * FROM challenges WHERE id = ?").get(id);
+  if (!challenge) return res.status(404).json({ error: "Desafio não encontrado" });
+  if (challenge.created_by_profile_id !== profileId) return res.status(403).json({ error: "Só quem criou o desafio pode cancelá-lo." });
+  db.prepare("DELETE FROM challenge_participants WHERE challenge_id = ?").run(id);
+  db.prepare("DELETE FROM challenges WHERE id = ?").run(id);
+  res.json({ ok: true });
+});
+
 // ---------- Physical activities (atividades físicas) ----------
 function rowToActivity(r) {
   return {
@@ -964,10 +1120,27 @@ app.post("/api/webhooks/activities/:token", (req, res) => {
   }
 });
 
+// Mapeia um mimetype de arquivo pra uma extensão curta usada no nome do arquivo salvo em
+// disco (pdfs de laudo ou fotos de exame, ambos guardados na mesma pasta de PDFs).
+function extFromMime(mime) {
+  if (!mime) return "pdf";
+  if (mime === "application/pdf") return "pdf";
+  if (mime === "image/png") return "png";
+  if (mime === "image/webp") return "webp";
+  if (mime === "image/heic" || mime === "image/heif") return "heic";
+  if (mime.startsWith("image/")) return "jpg";
+  return "pdf";
+}
+
 // ---------- AI extraction ----------
 app.post("/api/extract", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
+    const isPdf = req.file.mimetype === "application/pdf";
+    const isImage = (req.file.mimetype || "").startsWith("image/");
+    if (!isPdf && !isImage) {
+      return res.status(400).json({ error: "Formato não suportado. Envie um PDF ou uma foto (JPG/PNG/WEBP) do laudo." });
+    }
     const { profileId } = req.body || {};
     const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
 
@@ -979,12 +1152,15 @@ app.post("/api/extract", upload.single("file"), async (req, res) => {
     }
 
     const base64 = req.file.buffer.toString("base64");
+    const fileContentBlock = isPdf
+      ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } }
+      : { type: "image", source: { type: "base64", media_type: req.file.mimetype, data: base64 } };
     const text = await callClaude(
       [
         {
           role: "user",
           content: [
-            { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+            fileContentBlock,
             { type: "text", text: EXTRACTION_PROMPT },
           ],
         },
@@ -995,9 +1171,9 @@ app.post("/api/extract", upload.single("file"), async (req, res) => {
     // Nota: a padronização (nome/referência únicos) não é sugerida automaticamente aqui —
     // por enquanto isso fica só na tela de reconciliação (dentro do perfil), pra decidir
     // manualmente e ganhar confiança antes de automatizar.
-    res.json({ ...parsed, hash, base64, fileName: req.file.originalname });
+    res.json({ ...parsed, hash, base64, fileName: req.file.originalname, mime: req.file.mimetype, ext: extFromMime(req.file.mimetype) });
   } catch (e) {
-    res.status(500).json({ error: e.message || "Erro ao processar PDF" });
+    res.status(500).json({ error: e.message || "Erro ao processar o arquivo" });
   }
 });
 
@@ -1005,21 +1181,22 @@ app.post("/api/extract", upload.single("file"), async (req, res) => {
 app.post("/api/profiles/:profileId/batches", (req, res) => {
   try {
     const { profileId } = req.params;
-    const { date, lab, doctor, results, base64, fileName, hash } = req.body || {};
+    const { date, lab, doctor, results, base64, fileName, hash, mime } = req.body || {};
     if (!Array.isArray(results) || results.length === 0) {
       return res.status(400).json({ error: "Nenhum resultado para salvar" });
     }
     const batchId = uid();
     let hasPdf = 0;
+    const fileMime = mime || "application/pdf";
     if (base64) {
       try {
-        fs.writeFileSync(path.join(pdfDir, `${batchId}.pdf`), Buffer.from(base64, "base64"));
+        fs.writeFileSync(path.join(pdfDir, `${batchId}.${extFromMime(fileMime)}`), Buffer.from(base64, "base64"));
         hasPdf = 1;
       } catch (e) {}
     }
     db.prepare(
-      "INSERT INTO batches (id, profile_id, date, lab, doctor, file_hash, pdf_filename, has_pdf, saved_at) VALUES (?,?,?,?,?,?,?,?,?)"
-    ).run(batchId, profileId, date || null, lab || "", doctor || "", hash || null, fileName || "exame.pdf", hasPdf, Date.now());
+      "INSERT INTO batches (id, profile_id, date, lab, doctor, file_hash, pdf_filename, has_pdf, file_mime, saved_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
+    ).run(batchId, profileId, date || null, lab || "", doctor || "", hash || null, fileName || "exame.pdf", hasPdf, fileMime, Date.now());
 
     const insertResult = db.prepare(
       "INSERT INTO results (id, batch_id, name, value, unit, ref, status, category, catalog_id, raw_name, raw_ref) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
@@ -1499,6 +1676,15 @@ app.get("/api/profiles/:profileId/whatsapp-uploads", (req, res) => {
   );
 });
 
+function mimeFromExt(ext) {
+  if (ext === "pdf") return "application/pdf";
+  if (ext === "png") return "image/png";
+  if (ext === "webp") return "image/webp";
+  if (ext === "heic" || ext === "heif") return "image/heic";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  return "application/pdf";
+}
+
 app.get("/api/profiles/:profileId/whatsapp-uploads/:uploadId", (req, res) => {
   const row = db.prepare("SELECT * FROM whatsapp_uploads WHERE id = ? AND profile_id = ?").get(req.params.uploadId, req.params.profileId);
   if (!row) return res.status(404).json({ error: "Não encontrado" });
@@ -1517,6 +1703,7 @@ app.get("/api/profiles/:profileId/whatsapp-uploads/:uploadId", (req, res) => {
     fileName: row.pdf_filename,
     hash: row.file_hash,
     isPdf: ext === "pdf",
+    mime: mimeFromExt(ext),
   });
 });
 

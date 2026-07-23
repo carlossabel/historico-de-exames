@@ -352,6 +352,51 @@ export function invoicePdfUrl(profileId, invoiceId) {
   return `/api/profiles/${profileId}/invoices/${invoiceId}/pdf`;
 }
 
+// ---------- Desafios entre perfis ----------
+
+export async function getChallengeMetrics() {
+  const r = await fetch("/api/challenge-metrics");
+  return r.json();
+}
+
+export async function getChallenges(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/challenges`);
+  return r.json();
+}
+
+export async function createChallenge(payload) {
+  const r = await fetch("/api/challenges", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao criar desafio");
+  return data;
+}
+
+export async function respondChallenge(challengeId, profileId, accept) {
+  const r = await fetch(`/api/challenges/${challengeId}/respond`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profileId, accept }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao responder convite");
+  return data;
+}
+
+export async function deleteChallenge(challengeId, profileId) {
+  const r = await fetch(`/api/challenges/${challengeId}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profileId }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao cancelar desafio");
+  return data;
+}
+
 // ---------- Catálogo de exames padrão ----------
 
 export async function getExamCatalog() {
