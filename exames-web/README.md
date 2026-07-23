@@ -279,6 +279,26 @@ saúde física (ex: "quem perde mais peso em 30 dias", "quem ganha mais massa mu
   o valor atual, a variação percentual de cada pessoa e quantos dias faltam para o fim.
 - Só quem criou o desafio pode cancelá-lo (isso remove o desafio pra todo mundo).
 
+## Sino de alertas automáticos
+
+No canto superior direito de cada perfil tem um sino com dois tipos de alerta, calculados
+automaticamente (sem gastar créditos de IA) sempre que é aberto:
+
+- **Exames pra refazer**: qualquer exame cujo valor mais recente esteja em "atenção" ou
+  "fora do ideal" e já tenha passado do prazo configurado sem uma medição mais nova
+  (padrão: 90 dias). O prazo é configurável em **Editar perfil** (lápis), por pessoa.
+- **Exames preventivos recomendados**: uma lista geral de bom senso de exames de check-up
+  (hemograma, glicemia, colesterol, TSH, vitamina D, creatinina etc.), ajustada pela idade
+  e sexo cadastrados no perfil (ex: PSA a partir dos 45 anos para homens, Papanicolau para
+  mulheres de 25 a 64 anos, mamografia a partir dos 40) e adiantada quando há histórico
+  familiar relevante marcado no perfil (ex: histórico de câncer reduz a idade mínima
+  sugerida pra PSA/mamografia/colonoscopia; histórico de diabetes adiciona hemoglobina
+  glicada). Só aparece na lista um exame que a pessoa **nunca registrou** no histórico.
+
+**Importante**: essa lista é um lembrete geral, não uma diretriz de nenhuma sociedade
+médica específica nem uma prescrição — o sino deixa isso explícito, e a decisão de fazer
+ou não cada exame deve ser validada com um médico.
+
 ## Estrutura
 
 ```

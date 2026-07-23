@@ -397,6 +397,13 @@ export async function deleteChallenge(challengeId, profileId) {
   return data;
 }
 
+export async function getSystemAlerts(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/system-alerts`);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao buscar alertas");
+  return data;
+}
+
 // ---------- Catálogo de exames padrão ----------
 
 export async function getExamCatalog() {

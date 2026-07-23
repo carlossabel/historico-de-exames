@@ -4,14 +4,14 @@ import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
   FileUp, Download, Weight, Pencil, Stethoscope, Dumbbell, Camera, Watch, Link, Copy, RefreshCw,
-  Footprints, PersonStanding, Bike, Waves, Mountain, CircleDot, Music, Zap, Flame, Receipt, MessageCircle,
+  Footprints, PersonStanding, Bike, Waves, Mountain, CircleDot, Music, Zap, Flame, Receipt, MessageCircle, Bell,
 } from "lucide-react";
 import * as api from "./api.js";
 
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-23l · Botões de cada aba (Saúde física, Sintomas, Atividades, Nfe exames) movidos pro topo do perfil, igual à aba Exames; e deixado claro que pressão arterial na Saúde física é opcional (nunca foi obrigatória, só não estava marcada como tal)";
+const APP_BUILD = "2026-07-23m · Novo sino de alertas (canto superior direito do perfil): exames alterados pra refazer após X dias (configurável em Editar perfil, padrão 90) e exames preventivos recomendados por idade/sexo/histórico familiar que ainda não foram feitos";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -675,6 +675,7 @@ function EditProfileModal({ profile, allProfiles, onClose, onSave, onOpenCatalog
   const [whatsapp, setWhatsapp] = useState(profile.whatsapp || "");
   const [pin, setPin] = useState("");
   const [hereditaryConditions, setHereditaryConditions] = useState(Array.isArray(profile.hereditaryConditions) ? profile.hereditaryConditions : []);
+  const [retestDays, setRetestDays] = useState(profile.retestDays ?? 90);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -725,7 +726,7 @@ function EditProfileModal({ profile, allProfiles, onClose, onSave, onOpenCatalog
     try {
       // Se o campo de senha ficou em branco, não manda "pin" no payload — o backend entende
       // isso como "não mexer na senha já cadastrada". Só manda se a pessoa digitou algo novo.
-      const payload = { name: name.trim(), birthDate: birthDate || null, gender: gender || null, heightCm: heightCm || null, whatsapp: whatsapp || null, hereditaryConditions };
+      const payload = { name: name.trim(), birthDate: birthDate || null, gender: gender || null, heightCm: heightCm || null, whatsapp: whatsapp || null, hereditaryConditions, retestDays: Number(retestDays) || 90 };
       if (pin) payload.pin = pin;
       await onSave(payload);
     } catch (e) {
@@ -826,6 +827,20 @@ function EditProfileModal({ profile, allProfiles, onClose, onSave, onOpenCatalog
           </button>
         ))}
       </div>
+
+      <div className="mb-1">
+        <label className="text-xs text-slate-500 mb-1 block">Alertar pra refazer exames alterados após quantos dias sem atualização</label>
+        <input
+          type="number"
+          min="1"
+          value={retestDays}
+          onChange={(e) => setRetestDays(e.target.value)}
+          className="w-full sm:w-32 border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
+        />
+      </div>
+      <p className="text-xs text-slate-400 mb-4">
+        Exames em "atenção" ou "fora do ideal" entram no sino de alertas se ficarem mais que esse número de dias sem uma medição mais nova. Padrão: 90 dias.
+      </p>
 
       <div className="border-t border-slate-100 pt-4 mb-4">
         <button
@@ -1238,6 +1253,96 @@ function ImportModal({ onClose, onDone }) {
   );
 }
 
+function AlertsBell({ profileId }) {
+  const [alerts, setAlerts] = useState(null);
+  const [open, setOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setAlerts(await api.getSystemAlerts(profileId));
+    } catch (e) {
+      setAlerts({ preventive: [], retest: [] });
+    }
+  }, [profileId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const total = alerts ? alerts.preventive.length + alerts.retest.length : 0;
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="relative text-slate-500 hover:text-slate-800 p-2 rounded-lg hover:bg-slate-100"
+        aria-label="Alertas"
+      >
+        <Bell size={19} />
+        {total > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[10px] leading-none rounded-full min-w-[16px] h-4 px-1 flex items-center justify-center">
+            {total > 9 ? "9+" : total}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-2 w-80 max-h-96 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-50 p-3">
+            <p className="text-sm font-medium text-slate-800 mb-2">Alertas</p>
+            {alerts === null ? (
+              <div className="flex justify-center py-6 text-slate-400"><Loader2 className="animate-spin" size={18} /></div>
+            ) : total === 0 ? (
+              <p className="text-xs text-slate-400 py-2">Nenhum alerta no momento.</p>
+            ) : (
+              <>
+                {alerts.retest.length > 0 && (
+                  <div className="mb-3">
+                    <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">Exames pra refazer</p>
+                    <div className="space-y-1.5">
+                      {alerts.retest.map((r, i) => (
+                        <div key={i} className="flex items-start gap-2 bg-red-50 border border-red-100 rounded-lg px-2.5 py-2">
+                          <AlertTriangle size={13} className="text-red-500 mt-0.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs text-slate-800">{r.exam}</p>
+                            <p className="text-[11px] text-slate-500">
+                              {STATUS_META[r.status]?.label || r.status} há {r.daysSince} dias (último em {fmtDate(r.lastDate)})
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {alerts.preventive.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">Exames preventivos recomendados</p>
+                    <div className="space-y-1.5">
+                      {alerts.preventive.map((p, i) => (
+                        <div key={i} className="flex items-start gap-2 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2">
+                          <Info size={13} className="text-slate-400 mt-0.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs text-slate-800">{p.exam}</p>
+                            <p className="text-[11px] text-slate-500">{p.reason}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-[11px] text-slate-400 mt-3 pt-2 border-t border-slate-100">
+                  Lembretes gerais, não uma prescrição — confirme com um médico quais exames fazem sentido pra você.
+                </p>
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ProfileScreen({ profile, allProfiles, onBack, initialTab, onProfileUpdate }) {
   const [index, setIndex] = useState(null);
   const [batches, setBatches] = useState({});
@@ -1429,9 +1534,12 @@ function ProfileScreen({ profile, allProfiles, onBack, initialTab, onProfileUpda
 
   return (
     <div>
-      <button onClick={onBack} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-4">
-        <ArrowLeft size={15} /> Perfis
-      </button>
+      <div className="flex items-center justify-between mb-4">
+        <button onClick={onBack} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
+          <ArrowLeft size={15} /> Perfis
+        </button>
+        <AlertsBell profileId={profile.id} />
+      </div>
 
       <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
         <div className="flex items-center gap-3">

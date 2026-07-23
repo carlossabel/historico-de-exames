@@ -313,6 +313,9 @@ if (!profilesCols.includes("hereditary_conditions")) {
 if (!profilesCols.includes("pin")) {
   db.exec("ALTER TABLE profiles ADD COLUMN pin TEXT");
 }
+if (!profilesCols.includes("retest_days")) {
+  db.exec("ALTER TABLE profiles ADD COLUMN retest_days INTEGER NOT NULL DEFAULT 90");
+}
 
 // Migração leve: bancos criados antes dos sintomas/composição corporal só tinham
 // based_on_batch_id na tabela alerts. Adiciona a coluna de assinatura combinada

@@ -157,7 +157,7 @@ function parseHereditary(raw) {
 
 app.get("/api/profiles", (req, res) => {
   const rows = db
-    .prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, pin, created_at as createdAt FROM profiles ORDER BY created_at ASC")
+    .prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, pin, retest_days as retestDays, created_at as createdAt FROM profiles ORDER BY created_at ASC")
     .all()
     .map((r) => {
       const { pin, ...rest } = r;
@@ -174,7 +174,7 @@ function validatePin(pin) {
 }
 
 app.post("/api/profiles", (req, res) => {
-  const { name, birthDate, gender, heightCm, whatsapp, hereditaryConditions, pin } = req.body || {};
+  const { name, birthDate, gender, heightCm, whatsapp, hereditaryConditions, pin, retestDays } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: "Nome obrigatório" });
   const pinCheck = validatePin(pin);
   if (!pinCheck.ok) return res.status(400).json({ error: "A senha precisa ter exatamente 4 números." });
@@ -185,31 +185,34 @@ app.post("/api/profiles", (req, res) => {
   const hereditaryJson = JSON.stringify(Array.isArray(hereditaryConditions) ? hereditaryConditions : []);
   const whatsappNormalized = whatsapp ? normalizePhone(whatsapp) : null;
   const pinValue = pinCheck.skip ? null : pinCheck.value;
-  db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, whatsapp, hereditary_conditions, pin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-    id, name.trim(), colorIdx, birthDate || null, gender || null, numOrNull(heightCm), whatsappNormalized, hereditaryJson, pinValue, createdAt
+  const retestDaysValue = Number.isFinite(Number(retestDays)) && Number(retestDays) > 0 ? Math.round(Number(retestDays)) : 90;
+  db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, whatsapp, hereditary_conditions, pin, retest_days, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+    id, name.trim(), colorIdx, birthDate || null, gender || null, numOrNull(heightCm), whatsappNormalized, hereditaryJson, pinValue, retestDaysValue, createdAt
   );
   res.json({
     id, name: name.trim(), colorIdx, birthDate: birthDate || null, gender: gender || null, heightCm: numOrNull(heightCm),
     whatsapp: whatsappNormalized, hereditaryConditions: Array.isArray(hereditaryConditions) ? hereditaryConditions : [],
-    hasPin: !!pinValue, createdAt,
+    hasPin: !!pinValue, retestDays: retestDaysValue, createdAt,
   });
 });
 
 app.put("/api/profiles/:id", (req, res) => {
   const { id } = req.params;
-  const existing = db.prepare("SELECT id, pin FROM profiles WHERE id = ?").get(id);
+  const existing = db.prepare("SELECT id, pin, retest_days FROM profiles WHERE id = ?").get(id);
   if (!existing) return res.status(404).json({ error: "Perfil não encontrado" });
-  const { name, birthDate, gender, heightCm, whatsapp, hereditaryConditions, pin } = req.body || {};
+  const { name, birthDate, gender, heightCm, whatsapp, hereditaryConditions, pin, retestDays } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: "Nome obrigatório" });
   const pinCheck = validatePin(pin);
   if (!pinCheck.ok) return res.status(400).json({ error: "A senha precisa ter exatamente 4 números." });
   const hereditaryJson = JSON.stringify(Array.isArray(hereditaryConditions) ? hereditaryConditions : []);
   const whatsappNormalized = whatsapp ? normalizePhone(whatsapp) : null;
   const pinValue = pinCheck.skip ? existing.pin : pinCheck.value;
-  db.prepare("UPDATE profiles SET name = ?, birth_date = ?, gender = ?, height_cm = ?, whatsapp = ?, hereditary_conditions = ?, pin = ? WHERE id = ?").run(
-    name.trim(), birthDate || null, gender || null, numOrNull(heightCm), whatsappNormalized, hereditaryJson, pinValue, id
+  const retestDaysValue = retestDays !== undefined && Number.isFinite(Number(retestDays)) && Number(retestDays) > 0
+    ? Math.round(Number(retestDays)) : existing.retest_days;
+  db.prepare("UPDATE profiles SET name = ?, birth_date = ?, gender = ?, height_cm = ?, whatsapp = ?, hereditary_conditions = ?, pin = ?, retest_days = ? WHERE id = ?").run(
+    name.trim(), birthDate || null, gender || null, numOrNull(heightCm), whatsappNormalized, hereditaryJson, pinValue, retestDaysValue, id
   );
-  const row = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, pin, created_at as createdAt FROM profiles WHERE id = ?").get(id);
+  const row = db.prepare("SELECT id, name, color_idx as colorIdx, birth_date as birthDate, gender, height_cm as heightCm, whatsapp, hereditary_conditions as hereditaryConditions, pin, retest_days as retestDays, created_at as createdAt FROM profiles WHERE id = ?").get(id);
   const { pin: _pin, ...rest } = row;
   res.json({ ...rest, hereditaryConditions: parseHereditary(row.hereditaryConditions), hasPin: !!_pin });
 });
@@ -716,6 +719,113 @@ app.delete("/api/profiles/:profileId/body-entries/:entryId", (req, res) => {
   if (fs.existsSync(photoPath)) fs.unlinkSync(photoPath);
   db.prepare("DELETE FROM body_entries WHERE id = ?").run(entryId);
   res.json({ ok: true });
+});
+
+// ---------- Sino de alertas automáticos ----------
+// Dois tipos de alerta, calculados na hora (sem IA, sem custo de API) sempre que o sino é
+// aberto: (1) exames preventivos recomendados pra idade/sexo/risco hereditário que a pessoa
+// nunca fez; (2) exames que já deram "atenção" ou "fora do ideal" e passaram do prazo
+// configurado (retest_days, padrão 90) sem serem refeitos.
+//
+// Regras de exames preventivos: casamento por palavra-chave (contém, sem acento/case)
+// contra o nome mais recente de cada exame já registrado pela pessoa. Isso é uma lista
+// GERAL de bom senso (não são diretrizes de nenhuma sociedade médica específica) — serve
+// como lembrete, nunca como prescrição; a pessoa deve validar com um médico.
+const PREVENTIVE_EXAM_RULES = [
+  { name: "Hemograma completo", keywords: ["hemograma"], appliesTo: () => true },
+  { name: "Glicemia de jejum", keywords: ["glicemia"], appliesTo: () => true },
+  { name: "Hemoglobina glicada", keywords: ["hemoglobina glicada", "hba1c"], appliesTo: (ctx) => ctx.age === null || ctx.age >= 35 || ctx.hereditary.includes("Diabetes") },
+  { name: "Colesterol total", keywords: ["colesterol total"], appliesTo: () => true },
+  { name: "Colesterol LDL", keywords: ["ldl"], appliesTo: (ctx) => ctx.age === null || ctx.age >= 35 || ctx.hereditary.includes("Colesterol alto") || ctx.hereditary.includes("Doença cardíaca") },
+  { name: "Colesterol HDL", keywords: ["hdl"], appliesTo: (ctx) => ctx.age === null || ctx.age >= 35 || ctx.hereditary.includes("Colesterol alto") || ctx.hereditary.includes("Doença cardíaca") },
+  { name: "Triglicerídeos", keywords: ["triglicer"], appliesTo: (ctx) => ctx.age === null || ctx.age >= 35 || ctx.hereditary.includes("Colesterol alto") },
+  { name: "Creatinina", keywords: ["creatinina"], appliesTo: (ctx) => ctx.age === null || ctx.age >= 30 || ctx.hereditary.includes("Doença renal") || ctx.hereditary.includes("Hipertensão") },
+  { name: "TSH", keywords: ["tsh"], appliesTo: () => true },
+  { name: "Vitamina D", keywords: ["vitamina d"], appliesTo: () => true },
+  { name: "Ácido úrico", keywords: ["acido urico", "ácido úrico"], appliesTo: (ctx) => ctx.age === null || ctx.age >= 40 },
+  {
+    name: "PSA (antígeno prostático)", keywords: ["psa"],
+    appliesTo: (ctx) => ctx.gender === "M" && ctx.age !== null && ctx.age >= (ctx.hereditary.includes("Câncer") ? 40 : 45),
+  },
+  {
+    name: "Mamografia", keywords: ["mamografia"],
+    appliesTo: (ctx) => ctx.gender === "F" && ctx.age !== null && ctx.age >= (ctx.hereditary.includes("Câncer") ? 35 : 40),
+  },
+  {
+    name: "Papanicolau", keywords: ["papanicolau", "citologia oncotica", "citopatologico"],
+    appliesTo: (ctx) => ctx.gender === "F" && ctx.age !== null && ctx.age >= 25 && ctx.age <= 64,
+  },
+  {
+    name: "Pesquisa de sangue oculto nas fezes / colonoscopia", keywords: ["sangue oculto", "colonoscopia"],
+    appliesTo: (ctx) => ctx.age !== null && ctx.age >= (ctx.hereditary.includes("Câncer") ? 40 : 50),
+  },
+];
+
+function normalizeForMatch(s) {
+  return (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+// Valor mais recente de cada exame já registrado pelo perfil (mesma lógica de agrupamento
+// usada no front-end: agrupa por nome normalizado, mantendo o resultado mais novo).
+function getLatestExamsForProfile(profileId) {
+  const rows = db
+    .prepare(
+      `SELECT r.name, r.status, b.date FROM results r
+       JOIN batches b ON b.id = r.batch_id
+       WHERE b.profile_id = ?
+       ORDER BY b.date DESC, b.saved_at DESC`
+    )
+    .all(profileId);
+  const seen = new Set();
+  const latest = [];
+  for (const r of rows) {
+    const key = normalizeForMatch(r.name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    latest.push(r);
+  }
+  return latest;
+}
+
+function computeSystemAlerts(profile) {
+  const age = ageFromBirthDate(profile.birthDate);
+  const hereditary = Array.isArray(profile.hereditaryConditions) ? profile.hereditaryConditions : [];
+  const ctx = { age, gender: profile.gender || null, hereditary };
+  const latestExams = getLatestExamsForProfile(profile.id);
+  const latestNamesNormalized = latestExams.map((r) => normalizeForMatch(r.name));
+
+  const preventive = PREVENTIVE_EXAM_RULES
+    .filter((rule) => rule.appliesTo(ctx))
+    .filter((rule) => !latestNamesNormalized.some((n) => rule.keywords.some((kw) => n.includes(normalizeForMatch(kw)))))
+    .map((rule) => ({
+      exam: rule.name,
+      reason: hereditary.length && rule.keywords.some((kw) =>
+        ["hba1c", "hemoglobina glicada"].includes(kw) && hereditary.includes("Diabetes")
+      ) ? "Recomendado pelo histórico familiar de diabetes, sem registro no seu histórico." : "Recomendado pra idade/sexo informados, sem registro no seu histórico.",
+    }));
+
+  const retestDays = profile.retestDays || 90;
+  const now = new Date();
+  const retest = latestExams
+    .filter((r) => r.status === "A" || r.status === "F")
+    .map((r) => {
+      const days = Math.floor((now - new Date(r.date)) / (1000 * 60 * 60 * 24));
+      return { exam: r.name, status: r.status, lastDate: r.date, daysSince: days };
+    })
+    .filter((r) => r.daysSince >= retestDays)
+    .sort((a, b) => b.daysSince - a.daysSince);
+
+  return { preventive, retest };
+}
+
+app.get("/api/profiles/:profileId/system-alerts", (req, res) => {
+  const { profileId } = req.params;
+  const profile = db
+    .prepare("SELECT id, birth_date as birthDate, gender, hereditary_conditions as hereditaryConditions, retest_days as retestDays FROM profiles WHERE id = ?")
+    .get(profileId);
+  if (!profile) return res.status(404).json({ error: "Perfil não encontrado" });
+  profile.hereditaryConditions = parseHereditary(profile.hereditaryConditions);
+  res.json(computeSystemAlerts(profile));
 });
 
 // ---------- Desafios de saúde física entre perfis ----------
