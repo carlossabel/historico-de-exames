@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 
 const dataDir = path.join(process.cwd(), "data");
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
@@ -339,6 +340,72 @@ if (!resultsCols.includes("raw_ref")) {
   db.exec("ALTER TABLE results ADD COLUMN raw_ref TEXT");
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_results_catalog ON results(catalog_id)");
+
+// ---------- Login com Google e controle de acesso por perfil ----------
+// `users`: contas que já fizeram login pelo menos uma vez (ou foram pré-cadastradas pelo
+// admin), com um papel (admin vê tudo; member só vê o que tiver em profile_access).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    google_sub TEXT UNIQUE,
+    email TEXT UNIQUE NOT NULL,
+    name TEXT,
+    picture TEXT,
+    role TEXT NOT NULL DEFAULT 'member',
+    created_at INTEGER NOT NULL,
+    last_login_at INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+
+  -- Quem pode acessar cada perfil, por e-mail (não por user_id) — assim dá pra "convidar"
+  -- alguém pra um perfil mesmo antes dessa pessoa ter feito login pela primeira vez.
+  CREATE TABLE IF NOT EXISTS profile_access (
+    id TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'owner', -- 'owner' | 'shared'
+    granted_at INTEGER NOT NULL,
+    UNIQUE(profile_id, email)
+  );
+  CREATE INDEX IF NOT EXISTS idx_profile_access_email ON profile_access(email);
+  CREATE INDEX IF NOT EXISTS idx_profile_access_profile ON profile_access(profile_id);
+  CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+`);
+
+// Associação inicial pedida: o e-mail do Carlos vira admin e dono do perfil "Carlos Eduardo
+// Sabel"; o e-mail da Aline vira dono do perfil "Aline Valentini Sabel". Roda a cada
+// start, mas só faz efeito se ainda não tiver sido feito (idempotente) — não sobrescreve
+// nada se já existir.
+function seedFamilyAccess() {
+  const seeds = [
+    { email: "carlossabel@gmail.com", name: "Carlos Eduardo Sabel", role: "admin", profileNameMatch: "carlos eduardo sabel" },
+    { email: "alinevalentini89@gmail.com", name: "Aline Valentini Sabel", role: "member", profileNameMatch: "aline valentini sabel" },
+  ];
+  for (const s of seeds) {
+    const existingUser = db.prepare("SELECT id FROM users WHERE email = ?").get(s.email);
+    if (!existingUser) {
+      db.prepare("INSERT INTO users (id, email, name, role, created_at) VALUES (?,?,?,?,?)").run(
+        crypto.randomUUID(), s.email, s.name, s.role, Date.now()
+      );
+    }
+    const profile = db.prepare("SELECT id FROM profiles WHERE LOWER(TRIM(name)) = ?").get(s.profileNameMatch);
+    if (profile) {
+      const existingAccess = db.prepare("SELECT id FROM profile_access WHERE profile_id = ? AND email = ?").get(profile.id, s.email);
+      if (!existingAccess) {
+        db.prepare("INSERT INTO profile_access (id, profile_id, email, role, granted_at) VALUES (?,?,?,?,?)").run(
+          crypto.randomUUID(), profile.id, s.email, "owner", Date.now()
+        );
+      }
+    }
+  }
+}
+seedFamilyAccess();
 
 export default db;
 export { pdfDir, bodyPhotoDir, invoiceDir, whatsappDir };

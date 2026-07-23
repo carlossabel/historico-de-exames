@@ -1,3 +1,65 @@
+// ---------- Autenticação (login com Google) ----------
+
+export async function getAuthConfig() {
+  const r = await fetch("/api/auth/config");
+  return r.json();
+}
+
+export async function getMe() {
+  const r = await fetch("/api/auth/me");
+  if (r.status === 401) return null;
+  return r.json();
+}
+
+export async function logout() {
+  await fetch("/api/auth/logout", { method: "POST" });
+}
+
+// ---------- Compartilhar perfil (área da família) ----------
+
+export async function getProfileAccess(profileId) {
+  const r = await fetch(`/api/profiles/${profileId}/access`);
+  return r.json();
+}
+
+export async function shareProfile(profileId, email) {
+  const r = await fetch(`/api/profiles/${profileId}/access`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao compartilhar perfil");
+  return data;
+}
+
+export async function revokeProfileAccess(profileId, email) {
+  const r = await fetch(`/api/profiles/${profileId}/access/${encodeURIComponent(email)}`, { method: "DELETE" });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao remover acesso");
+  return data;
+}
+
+// ---------- Administração ----------
+
+export async function getAdminUsers() {
+  const r = await fetch("/api/admin/users");
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao buscar usuários");
+  return data;
+}
+
+export async function updateUserRole(userId, role) {
+  const r = await fetch(`/api/admin/users/${userId}/role`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao atualizar papel do usuário");
+  return data;
+}
+
 export async function getProfiles() {
   const r = await fetch("/api/profiles");
   return r.json();

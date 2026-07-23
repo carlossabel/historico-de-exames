@@ -5,13 +5,14 @@ import {
   CheckCircle2, X, Loader2, ChevronRight, ArrowLeft, Trash2, Sparkles, ClipboardEdit, Info,
   FileUp, Download, Weight, Pencil, Stethoscope, Dumbbell, Camera, Watch, Link, Copy, RefreshCw,
   Footprints, PersonStanding, Bike, Waves, Mountain, CircleDot, Music, Zap, Flame, Receipt, MessageCircle, Bell,
+  Shield, LogOut, Users,
 } from "lucide-react";
 import * as api from "./api.js";
 
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-23m · Novo sino de alertas (canto superior direito do perfil): exames alterados pra refazer após X dias (configurável em Editar perfil, padrão 90) e exames preventivos recomendados por idade/sexo/histórico familiar que ainda não foram feitos";
+const APP_BUILD = "2026-07-23n · Login com Google obrigatório, compartilhamento de perfis por e-mail (\"perfil da família\") e área de administração — veja o README para configurar GOOGLE_CLIENT_ID/SECRET no Railway";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -372,6 +373,9 @@ function compactLabName(lab) {
 }
 
 export default function App() {
+  const [authChecked, setAuthChecked] = useState(false);
+  const [user, setUser] = useState(null);
+  const [authError, setAuthError] = useState(null);
   const [profiles, setProfiles] = useState(null);
   const [screen, setScreen] = useState({ name: "home" });
   const [showAddProfile, setShowAddProfile] = useState(false);
@@ -381,10 +385,26 @@ export default function App() {
   const refreshProfiles = async () => setProfiles(await api.getProfiles());
 
   useEffect(() => {
-    refreshProfiles();
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("auth") === "denied") {
+      setAuthError(`O e-mail ${params.get("email") || ""} ainda não tem acesso. Peça pra ${"Carlos Eduardo Sabel"} compartilhar um perfil com você.`);
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (params.get("auth") === "error") {
+      setAuthError("Não consegui concluir o login com o Google. Tente novamente.");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+    api.getMe().then((me) => {
+      setUser(me);
+      setAuthChecked(true);
+    });
   }, []);
 
   useEffect(() => {
+    if (user) refreshProfiles();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
     const params = new URLSearchParams(window.location.search);
     const connectedProfile = params.get("connectedProfile");
     const provider = params.get("provider");
@@ -398,7 +418,7 @@ export default function App() {
       window.history.replaceState({}, "", window.location.pathname);
       setTimeout(() => setConnectedToast(null), 6000);
     }
-  }, []);
+  }, [user]);
 
   const addProfile = async (name, extra = {}) => {
     const newProfile = await api.createProfile(name, extra);
@@ -417,6 +437,25 @@ export default function App() {
     setProfiles((prev) => (prev || []).map((p) => (p.id === updated.id ? updated : p)));
   };
 
+  const handleLogout = async () => {
+    await api.logout();
+    setUser(null);
+    setProfiles(null);
+    setScreen({ name: "home" });
+  };
+
+  if (!authChecked) {
+    return (
+      <div className="flex items-center justify-center py-20 text-slate-400">
+        <Loader2 className="animate-spin" size={22} />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginScreen error={authError} />;
+  }
+
   if (profiles === null) {
     return (
       <div className="flex items-center justify-center py-20 text-slate-400">
@@ -433,13 +472,24 @@ export default function App() {
         </div>
       )}
       {screen.name === "home" && (
-        <HomeScreen profiles={profiles} onOpen={(id) => setScreen({ name: "profile", profileId: id })} onAdd={() => setShowAddProfile(true)} onRemove={removeProfile} onImport={() => setShowImport(true)} />
+        <HomeScreen
+          profiles={profiles}
+          user={user}
+          onOpen={(id) => setScreen({ name: "profile", profileId: id })}
+          onAdd={() => setShowAddProfile(true)}
+          onRemove={removeProfile}
+          onImport={() => setShowImport(true)}
+          onLogout={handleLogout}
+          onOpenAdmin={() => setScreen({ name: "admin" })}
+        />
       )}
+      {screen.name === "admin" && <AdminScreen onBack={() => setScreen({ name: "home" })} />}
       {screen.name === "profile" && (
         profiles.find((p) => p.id === screen.profileId) ? (
           <ProfileScreen
             profile={profiles.find((p) => p.id === screen.profileId)}
             allProfiles={profiles}
+            user={user}
             initialTab={screen.initialTab}
             onBack={() => setScreen({ name: "home" })}
             onProfileUpdate={updateProfileInfo}
@@ -456,7 +506,128 @@ export default function App() {
   );
 }
 
-function HomeScreen({ profiles, onOpen, onAdd, onRemove, onImport }) {
+function LoginScreen({ error }) {
+  const [config, setConfig] = useState(null);
+
+  useEffect(() => {
+    api.getAuthConfig().then(setConfig).catch(() => setConfig({ googleConfigured: false }));
+  }, []);
+
+  return (
+    <div className="w-full max-w-sm mx-auto px-4 py-24 text-center">
+      <div className="w-14 h-14 rounded-full bg-slate-900 text-white flex items-center justify-center mx-auto mb-4">
+        <User size={24} />
+      </div>
+      <h1 className="text-xl font-medium text-slate-900 mb-1">Histórico de exames</h1>
+      <p className="text-sm text-slate-500 mb-6">Entre com sua conta Google para acessar os perfis da família.</p>
+
+      {error && (
+        <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-left">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+
+      {config === null ? (
+        <div className="flex justify-center py-4 text-slate-400"><Loader2 className="animate-spin" size={20} /></div>
+      ) : config.googleConfigured ? (
+        <a
+          href="/api/auth/google/start"
+          className="inline-flex items-center gap-2 bg-slate-900 text-white text-sm font-medium px-5 py-2.5 rounded-lg hover:bg-slate-800"
+        >
+          Entrar com o Google
+        </a>
+      ) : (
+        <div className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-left">
+          O login com Google ainda não foi configurado neste servidor. Um administrador precisa
+          definir as variáveis de ambiente <code className="font-mono">GOOGLE_CLIENT_ID</code> e{" "}
+          <code className="font-mono">GOOGLE_CLIENT_SECRET</code> no Railway.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminScreen({ onBack }) {
+  const [users, setUsers] = useState(null);
+  const [error, setError] = useState(null);
+  const [savingId, setSavingId] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      setUsers(await api.getAdminUsers());
+    } catch (e) {
+      setError(e.message || "Erro ao carregar usuários");
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const toggleRole = async (u) => {
+    setSavingId(u.id);
+    setError(null);
+    try {
+      await api.updateUserRole(u.id, u.role === "admin" ? "member" : "admin");
+      await load();
+    } catch (e) {
+      setError(e.message || "Erro ao atualizar papel");
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  return (
+    <div className="w-full max-w-3xl mx-auto">
+      <button onClick={onBack} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-4">
+        <ArrowLeft size={15} /> Perfis
+      </button>
+      <h1 className="text-xl font-medium text-slate-900 mb-1">Administração</h1>
+      <p className="text-sm text-slate-500 mb-5">Todas as contas com acesso ao sistema e os perfis que cada uma pode ver.</p>
+
+      {error && (
+        <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+
+      {users === null ? (
+        <div className="flex justify-center py-16 text-slate-400"><Loader2 className="animate-spin" size={22} /></div>
+      ) : (
+        <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
+          {users.map((u) => (
+            <div key={u.id} className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+              <div className="min-w-0">
+                <p className="text-sm text-slate-800 flex items-center gap-2">
+                  {u.name || u.email}
+                  <span className={`text-[11px] px-2 py-0.5 rounded-full ${u.role === "admin" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"}`}>
+                    {u.role === "admin" ? "Admin" : "Membro"}
+                  </span>
+                </p>
+                <p className="text-xs text-slate-400">{u.email}</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  {u.profiles.length === 0
+                    ? "Sem perfis vinculados"
+                    : u.profiles.map((p) => `${p.profileName}${p.role === "owner" ? "" : " (compartilhado)"}`).join(", ")}
+                </p>
+                <p className="text-[11px] text-slate-300 mt-0.5">
+                  Último login: {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString("pt-BR") : "nunca"}
+                </p>
+              </div>
+              <button
+                onClick={() => toggleRole(u)}
+                disabled={savingId === u.id}
+                className="text-xs px-2.5 py-1.5 rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50 shrink-0"
+              >
+                {savingId === u.id ? "..." : u.role === "admin" ? "Remover admin" : "Tornar admin"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HomeScreen({ profiles, user, onOpen, onAdd, onRemove, onImport, onLogout, onOpenAdmin }) {
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState(null);
@@ -481,6 +652,20 @@ function HomeScreen({ profiles, onOpen, onAdd, onRemove, onImport }) {
 
   return (
     <div>
+      <div className="flex items-center justify-between mb-4 text-xs text-slate-400">
+        <span className="truncate">{user.name || user.email}{user.role === "admin" ? " · admin" : ""}</span>
+        <div className="flex items-center gap-3 shrink-0">
+          {user.role === "admin" && (
+            <button onClick={onOpenAdmin} className="hover:text-slate-700 flex items-center gap-1">
+              <Shield size={13} /> Administração
+            </button>
+          )}
+          <button onClick={onLogout} className="hover:text-slate-700 flex items-center gap-1">
+            <LogOut size={13} /> Sair
+          </button>
+        </div>
+      </div>
+
       <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
         <div>
           <h1 className="text-xl font-medium text-slate-900">Histórico de exames</h1>
@@ -521,7 +706,11 @@ function HomeScreen({ profiles, onOpen, onAdd, onRemove, onImport }) {
               <div key={p.id} className="relative group border border-slate-200 rounded-xl p-4 hover:border-slate-300 transition cursor-pointer" onClick={() => onOpen(p.id)}>
                 <div className={`w-11 h-11 rounded-full ${c.bg} ${c.text} flex items-center justify-center font-medium text-sm mb-3`}>{initials(p.name)}</div>
                 <p className="text-sm font-medium text-slate-900 truncate">{p.name}</p>
-                <p className="text-xs text-slate-400 mt-0.5">Ver histórico</p>
+                {p.accessRole === "shared" ? (
+                  <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-1"><Users size={11} /> Perfil da família</p>
+                ) : (
+                  <p className="text-xs text-slate-400 mt-0.5">Ver histórico</p>
+                )}
                 <button onClick={(e) => { e.stopPropagation(); setConfirmDelete(p); }} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition" aria-label={`Remover ${p.name}`}>
                   <Trash2 size={14} />
                 </button>
@@ -667,7 +856,7 @@ function AddProfileModal({ onClose, onConfirm }) {
   );
 }
 
-function EditProfileModal({ profile, allProfiles, onClose, onSave, onOpenCatalog }) {
+function EditProfileModal({ profile, allProfiles, user, onClose, onSave, onOpenCatalog }) {
   const [name, setName] = useState(profile.name || "");
   const [birthDate, setBirthDate] = useState(profile.birthDate || "");
   const [gender, setGender] = useState(profile.gender || "");
@@ -678,6 +867,47 @@ function EditProfileModal({ profile, allProfiles, onClose, onSave, onOpenCatalog
   const [retestDays, setRetestDays] = useState(profile.retestDays ?? 90);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+
+  const [access, setAccess] = useState(null);
+  const [shareEmail, setShareEmail] = useState("");
+  const [shareError, setShareError] = useState(null);
+  const [sharing, setSharing] = useState(false);
+
+  const loadAccess = useCallback(async () => {
+    try {
+      setAccess(await api.getProfileAccess(profile.id));
+    } catch (e) {
+      setAccess({ access: [], canManage: false });
+    }
+  }, [profile.id]);
+
+  useEffect(() => { loadAccess(); }, [loadAccess]);
+
+  const handleShare = async () => {
+    const email = shareEmail.trim().toLowerCase();
+    if (!email) return;
+    setSharing(true);
+    setShareError(null);
+    try {
+      await api.shareProfile(profile.id, email);
+      setShareEmail("");
+      await loadAccess();
+    } catch (e) {
+      setShareError(e.message || "Erro ao compartilhar perfil");
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  const handleRevoke = async (email) => {
+    setShareError(null);
+    try {
+      await api.revokeProfileAccess(profile.id, email);
+      await loadAccess();
+    } catch (e) {
+      setShareError(e.message || "Erro ao remover acesso");
+    }
+  };
 
   const [challenges, setChallenges] = useState(null);
   const [showCreateChallenge, setShowCreateChallenge] = useState(false);
@@ -841,6 +1071,57 @@ function EditProfileModal({ profile, allProfiles, onClose, onSave, onOpenCatalog
       <p className="text-xs text-slate-400 mb-4">
         Exames em "atenção" ou "fora do ideal" entram no sino de alertas se ficarem mais que esse número de dias sem uma medição mais nova. Padrão: 90 dias.
       </p>
+
+      <div className="border-t border-slate-100 pt-4 mb-4">
+        <p className="text-sm font-medium text-slate-700 flex items-center gap-1.5 mb-2">
+          <Users size={15} className="text-slate-400" /> Compartilhar perfil
+        </p>
+        {access === null ? (
+          <div className="flex justify-center py-3 text-slate-400"><Loader2 className="animate-spin" size={16} /></div>
+        ) : (
+          <>
+            <p className="text-xs text-slate-400 mb-2">
+              Quem tem acesso vê este perfil na tela inicial{access.access.some((a) => a.role === "shared") ? ", marcado como \"Perfil da família\" pra quem não é o dono" : ""}.
+            </p>
+            <div className="space-y-1 mb-3">
+              {access.access.map((a) => (
+                <div key={a.email} className="flex items-center justify-between gap-2 text-sm bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                  <span className="text-slate-700 truncate">{a.email}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">{a.role === "owner" ? "Dono" : "Compartilhado"}</span>
+                    {access.canManage && a.role === "shared" && (
+                      <button onClick={() => handleRevoke(a.email)} className="text-slate-300 hover:text-red-500"><X size={14} /></button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {access.canManage ? (
+              <>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="email"
+                    value={shareEmail}
+                    onChange={(e) => setShareEmail(e.target.value)}
+                    placeholder="e-mail da pessoa da família"
+                    className="flex-1 border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
+                  />
+                  <button
+                    onClick={handleShare}
+                    disabled={!shareEmail.trim() || sharing}
+                    className="text-xs px-3 py-1.5 rounded-md bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800 shrink-0"
+                  >
+                    {sharing ? "..." : "Compartilhar"}
+                  </button>
+                </div>
+                {shareError && <p className="text-xs text-red-600 mt-1.5">{shareError}</p>}
+              </>
+            ) : (
+              <p className="text-xs text-slate-400">Só o dono do perfil (ou o admin) pode gerenciar quem tem acesso.</p>
+            )}
+          </>
+        )}
+      </div>
 
       <div className="border-t border-slate-100 pt-4 mb-4">
         <button
@@ -1343,7 +1624,7 @@ function AlertsBell({ profileId }) {
   );
 }
 
-function ProfileScreen({ profile, allProfiles, onBack, initialTab, onProfileUpdate }) {
+function ProfileScreen({ profile, allProfiles, user, onBack, initialTab, onProfileUpdate }) {
   const [index, setIndex] = useState(null);
   const [batches, setBatches] = useState({});
   const [uploading, setUploading] = useState(false);
@@ -1727,6 +2008,7 @@ function ProfileScreen({ profile, allProfiles, onBack, initialTab, onProfileUpda
         <EditProfileModal
           profile={profile}
           allProfiles={allProfiles}
+          user={user}
           onClose={() => setEditProfileOpen(false)}
           onSave={saveProfileEdit}
           onOpenCatalog={() => { setEditProfileOpen(false); setCatalogModalOpen(true); }}

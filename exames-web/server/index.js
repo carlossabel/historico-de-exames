@@ -4,6 +4,7 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import cookieParser from "cookie-parser";
 import { fileURLToPath } from "url";
 import db, { pdfDir, bodyPhotoDir, invoiceDir, whatsappDir } from "./db.js";
 import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, INVOICE_EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, buildBodyAgePrompt, buildBodyMetricInfoPrompt, BODY_PHOTO_EXTRACTION_PROMPT, buildExamMatchPrompt, buildExamGroupingPrompt, parseRefBounds, computeStatusFromRef } from "./anthropic.js";
@@ -11,8 +12,9 @@ import { verifyWebhook, handleWebhook, normalizePhone } from "./whatsapp.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-app.set("trust proxy", 1); // necessário pra montar a URL de callback do Strava corretamente atrás do proxy do Railway
-app.use(cors());
+app.set("trust proxy", 1); // necessário pra montar a URL de callback do Strava/Google corretamente atrás do proxy do Railway
+app.use(cors({ origin: true, credentials: true }));
+app.use(cookieParser());
 app.use(express.json({ limit: "60mb", verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
@@ -20,6 +22,172 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 *
 function uid() {
   return crypto.randomBytes(8).toString("hex");
 }
+
+function getBaseUrl(req) {
+  if (process.env.STRAVA_REDIRECT_BASE_URL) return process.env.STRAVA_REDIRECT_BASE_URL;
+  const proto = req.headers["x-forwarded-proto"] || req.protocol;
+  return `${proto}://${req.get("host")}`;
+}
+
+// ---------- Login com Google e controle de acesso por perfil ----------
+// Sessão simples: um token aleatório guardado num cookie httpOnly, com a linha
+// correspondente na tabela `sessions` apontando pro usuário. Sem JWT, sem dependências
+// pesadas — mesmo espírito das outras integrações OAuth2 já existentes (Strava).
+const SESSION_COOKIE = "sid";
+const SESSION_DAYS = 30;
+
+function createSession(userId) {
+  const id = crypto.randomBytes(24).toString("hex");
+  const now = Date.now();
+  db.prepare("INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?,?,?,?)").run(
+    id, userId, now, now + SESSION_DAYS * 24 * 60 * 60 * 1000
+  );
+  return id;
+}
+
+function setSessionCookie(req, res, sessionId) {
+  res.cookie(SESSION_COOKIE, sessionId, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: getBaseUrl(req).startsWith("https"),
+    maxAge: SESSION_DAYS * 24 * 60 * 60 * 1000,
+    path: "/",
+  });
+}
+
+function getSessionUser(req) {
+  const sid = req.cookies?.[SESSION_COOKIE];
+  if (!sid) return null;
+  const row = db
+    .prepare(
+      `SELECT u.id, u.email, u.name, u.picture, u.role FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.id = ? AND s.expires_at > ?`
+    )
+    .get(sid, Date.now());
+  return row || null;
+}
+
+// Só pode entrar quem já tem alguma linha em profile_access (foi convidado pra pelo menos
+// um perfil) ou já existe como usuário — evita que qualquer conta Google se autocadastre.
+function isEmailAllowed(email) {
+  const norm = (email || "").toLowerCase();
+  const asUser = db.prepare("SELECT id FROM users WHERE email = ?").get(norm);
+  if (asUser) return true;
+  const asAccess = db.prepare("SELECT id FROM profile_access WHERE LOWER(email) = ?").get(norm);
+  return !!asAccess;
+}
+
+function requireAuth(req, res, next) {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: "Não autenticado" });
+  req.user = user;
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.user || req.user.role !== "admin") return res.status(403).json({ error: "Acesso restrito ao administrador" });
+  next();
+}
+
+// Rotas que precisam continuar acessíveis SEM login: a própria autenticação, o webhook do
+// WhatsApp (chamado pela Meta, não pelo navegador) e o callback do Strava/Google.
+const PUBLIC_API_PREFIXES = ["/api/auth/", "/api/whatsapp/webhook"];
+app.use((req, res, next) => {
+  if (!req.path.startsWith("/api/")) return next();
+  if (PUBLIC_API_PREFIXES.some((p) => req.path.startsWith(p))) return next();
+  return requireAuth(req, res, next);
+});
+
+// Controla acesso por perfil: qualquer rota com :profileId passa por aqui automaticamente.
+app.param("profileId", (req, res, next, profileId) => {
+  if (!req.user) return res.status(401).json({ error: "Não autenticado" });
+  if (req.user.role === "admin") return next();
+  const has = db.prepare("SELECT 1 FROM profile_access WHERE profile_id = ? AND LOWER(email) = ?").get(profileId, req.user.email.toLowerCase());
+  if (!has) return res.status(403).json({ error: "Você não tem acesso a este perfil" });
+  next();
+});
+
+app.get("/api/auth/config", (req, res) => {
+  res.json({ googleConfigured: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) });
+});
+
+app.get("/api/auth/me", (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: "Não autenticado" });
+  res.json(user);
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  const sid = req.cookies?.[SESSION_COOKIE];
+  if (sid) db.prepare("DELETE FROM sessions WHERE id = ?").run(sid);
+  res.clearCookie(SESSION_COOKIE, { path: "/" });
+  res.json({ ok: true });
+});
+
+app.get("/api/auth/google/start", (req, res) => {
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    return res.status(500).send("GOOGLE_CLIENT_ID não configurado no servidor. Peça pro administrador configurar as variáveis de ambiente do Google.");
+  }
+  const redirectUri = `${getBaseUrl(req)}/api/auth/google/callback`;
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(process.env.GOOGLE_CLIENT_ID)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent("openid email profile")}&prompt=select_account`;
+  res.redirect(url);
+});
+
+app.get("/api/auth/google/callback", async (req, res) => {
+  try {
+    const { code } = req.query;
+    if (!code) return res.redirect("/?auth=error");
+    const redirectUri = `${getBaseUrl(req)}/api/auth/google/callback`;
+    const tokenResp = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code, client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: redirectUri, grant_type: "authorization_code",
+      }),
+    });
+    const tokenData = await tokenResp.json();
+    if (!tokenResp.ok || !tokenData.access_token) {
+      console.error("Erro ao trocar código do Google:", tokenData);
+      return res.redirect("/?auth=error");
+    }
+    const userResp = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    const profile = await userResp.json();
+    if (!userResp.ok || !profile.email) {
+      console.error("Erro ao buscar perfil do Google:", profile);
+      return res.redirect("/?auth=error");
+    }
+
+    const email = profile.email.toLowerCase();
+    if (!isEmailAllowed(email)) {
+      return res.redirect(`/?auth=denied&email=${encodeURIComponent(email)}`);
+    }
+
+    let user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+    const now = Date.now();
+    if (!user) {
+      const id = crypto.randomUUID();
+      db.prepare("INSERT INTO users (id, google_sub, email, name, picture, role, created_at, last_login_at) VALUES (?,?,?,?,?,?,?,?)").run(
+        id, profile.sub || null, email, profile.name || "", profile.picture || null, "member", now, now
+      );
+      user = { id };
+    } else {
+      db.prepare("UPDATE users SET google_sub = ?, name = ?, picture = ?, last_login_at = ? WHERE id = ?").run(
+        profile.sub || user.google_sub, profile.name || user.name, profile.picture || user.picture, now, user.id
+      );
+    }
+
+    const sessionId = createSession(user.id);
+    setSessionCookie(req, res, sessionId);
+    res.redirect("/");
+  } catch (e) {
+    console.error("Erro no callback do Google:", e);
+    res.redirect("/?auth=error");
+  }
+});
 
 // ---------- Catálogo de exames padrão ----------
 // Unifica nomes de exames diferentes entre laboratórios (ex: "Hemoglobina" vs "Hb") e
@@ -161,8 +329,10 @@ app.get("/api/profiles", (req, res) => {
     .all()
     .map((r) => {
       const { pin, ...rest } = r;
-      return { ...rest, hereditaryConditions: parseHereditary(r.hereditaryConditions), hasPin: !!pin };
-    });
+      const access = db.prepare("SELECT role FROM profile_access WHERE profile_id = ? AND LOWER(email) = ?").get(r.id, req.user.email.toLowerCase());
+      return { ...rest, hereditaryConditions: parseHereditary(r.hereditaryConditions), hasPin: !!pin, accessRole: access?.role || null };
+    })
+    .filter((r) => req.user.role === "admin" || r.accessRole);
   res.json(rows);
 });
 
@@ -189,15 +359,18 @@ app.post("/api/profiles", (req, res) => {
   db.prepare("INSERT INTO profiles (id, name, color_idx, birth_date, gender, height_cm, whatsapp, hereditary_conditions, pin, retest_days, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
     id, name.trim(), colorIdx, birthDate || null, gender || null, numOrNull(heightCm), whatsappNormalized, hereditaryJson, pinValue, retestDaysValue, createdAt
   );
+  db.prepare("INSERT INTO profile_access (id, profile_id, email, role, granted_at) VALUES (?,?,?,?,?)").run(
+    uid(), id, req.user.email.toLowerCase(), "owner", createdAt
+  );
   res.json({
     id, name: name.trim(), colorIdx, birthDate: birthDate || null, gender: gender || null, heightCm: numOrNull(heightCm),
     whatsapp: whatsappNormalized, hereditaryConditions: Array.isArray(hereditaryConditions) ? hereditaryConditions : [],
-    hasPin: !!pinValue, retestDays: retestDaysValue, createdAt,
+    hasPin: !!pinValue, retestDays: retestDaysValue, accessRole: "owner", createdAt,
   });
 });
 
-app.put("/api/profiles/:id", (req, res) => {
-  const { id } = req.params;
+app.put("/api/profiles/:profileId", (req, res) => {
+  const { profileId: id } = req.params;
   const existing = db.prepare("SELECT id, pin, retest_days FROM profiles WHERE id = ?").get(id);
   if (!existing) return res.status(404).json({ error: "Perfil não encontrado" });
   const { name, birthDate, gender, heightCm, whatsapp, hereditaryConditions, pin, retestDays } = req.body || {};
@@ -217,8 +390,8 @@ app.put("/api/profiles/:id", (req, res) => {
   res.json({ ...rest, hereditaryConditions: parseHereditary(row.hereditaryConditions), hasPin: !!_pin });
 });
 
-app.delete("/api/profiles/:id", (req, res) => {
-  const { id } = req.params;
+app.delete("/api/profiles/:profileId", (req, res) => {
+  const { profileId: id } = req.params;
   const batches = db.prepare("SELECT id FROM batches WHERE profile_id = ?").all(id);
   for (const b of batches) {
     const pdfPath = path.join(pdfDir, `${b.id}.pdf`);
@@ -253,7 +426,73 @@ app.delete("/api/profiles/:id", (req, res) => {
   }
   db.prepare("DELETE FROM whatsapp_uploads WHERE profile_id = ?").run(id);
   db.prepare("UPDATE whatsapp_sessions SET profile_id = NULL WHERE profile_id = ?").run(id);
+  db.prepare("DELETE FROM profile_access WHERE profile_id = ?").run(id);
   db.prepare("DELETE FROM profiles WHERE id = ?").run(id);
+  res.json({ ok: true });
+});
+
+// ---------- Compartilhar perfil (área da família) ----------
+function isProfileOwner(profileId, email) {
+  const row = db.prepare("SELECT role FROM profile_access WHERE profile_id = ? AND LOWER(email) = ?").get(profileId, email.toLowerCase());
+  return row?.role === "owner";
+}
+
+app.get("/api/profiles/:profileId/access", (req, res) => {
+  const rows = db.prepare("SELECT email, role, granted_at as grantedAt FROM profile_access WHERE profile_id = ? ORDER BY role ASC, granted_at ASC").all(req.params.profileId);
+  res.json({ access: rows, canManage: req.user.role === "admin" || isProfileOwner(req.params.profileId, req.user.email) });
+});
+
+app.post("/api/profiles/:profileId/access", (req, res) => {
+  const { profileId } = req.params;
+  if (req.user.role !== "admin" && !isProfileOwner(profileId, req.user.email)) {
+    return res.status(403).json({ error: "Só o dono do perfil pode compartilhá-lo." });
+  }
+  const email = (req.body?.email || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) return res.status(400).json({ error: "Informe um e-mail válido." });
+  const existing = db.prepare("SELECT id, role FROM profile_access WHERE profile_id = ? AND LOWER(email) = ?").get(profileId, email);
+  if (existing) {
+    return res.status(409).json({ error: "Esse e-mail já tem acesso a este perfil." });
+  }
+  db.prepare("INSERT INTO profile_access (id, profile_id, email, role, granted_at) VALUES (?,?,?,?,?)").run(uid(), profileId, email, "shared", Date.now());
+  res.json({ ok: true });
+});
+
+app.delete("/api/profiles/:profileId/access/:email", (req, res) => {
+  const { profileId, email } = req.params;
+  if (req.user.role !== "admin" && !isProfileOwner(profileId, req.user.email)) {
+    return res.status(403).json({ error: "Só o dono do perfil pode remover acesso." });
+  }
+  const row = db.prepare("SELECT role FROM profile_access WHERE profile_id = ? AND LOWER(email) = ?").get(profileId, email.toLowerCase());
+  if (row?.role === "owner") return res.status(400).json({ error: "Não é possível remover o dono do perfil por aqui." });
+  db.prepare("DELETE FROM profile_access WHERE profile_id = ? AND LOWER(email) = ?").run(profileId, email.toLowerCase());
+  res.json({ ok: true });
+});
+
+// ---------- Administração (apenas o admin) ----------
+app.get("/api/admin/users", requireAdmin, (req, res) => {
+  const users = db.prepare("SELECT id, email, name, picture, role, created_at as createdAt, last_login_at as lastLoginAt FROM users ORDER BY created_at ASC").all();
+  const access = db
+    .prepare(
+      `SELECT pa.email, pa.role, p.name as profileName FROM profile_access pa
+       JOIN profiles p ON p.id = pa.profile_id`
+    )
+    .all();
+  const byEmail = {};
+  for (const a of access) {
+    const key = a.email.toLowerCase();
+    if (!byEmail[key]) byEmail[key] = [];
+    byEmail[key].push({ profileName: a.profileName, role: a.role });
+  }
+  res.json(users.map((u) => ({ ...u, profiles: byEmail[u.email.toLowerCase()] || [] })));
+});
+
+app.put("/api/admin/users/:userId/role", requireAdmin, (req, res) => {
+  const { userId } = req.params;
+  const { role } = req.body || {};
+  if (!["admin", "member"].includes(role)) return res.status(400).json({ error: "Papel inválido" });
+  const user = db.prepare("SELECT id FROM users WHERE id = ?").get(userId);
+  if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
+  db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, userId);
   res.json({ ok: true });
 });
 
@@ -1053,9 +1292,6 @@ app.delete("/api/profiles/:profileId/activities/:activityId", (req, res) => {
 });
 
 // ---------- Strava (integração via OAuth2, sincronização de atividades) ----------
-function getBaseUrl(req) {
-  return process.env.STRAVA_REDIRECT_BASE_URL || `${req.protocol}://${req.get("host")}`;
-}
 
 const STRAVA_TYPE_LABELS = {
   Run: "Corrida", VirtualRun: "Corrida (virtual)", TrailRun: "Corrida em trilha",
