@@ -428,20 +428,30 @@ app.post("/api/exam-catalog/reconcile", (req, res) => {
 
 // Sugere agrupamentos (via IA) dos nomes ainda não padronizados, pra tela de reconciliação
 // não precisar que o usuário identifique manualmente quais nomes são o mesmo exame.
+// Sugere agrupamentos (via IA) dos nomes ainda não padronizados, pra tela de reconciliação
+// não precisar que o usuário identifique manualmente quais nomes são o mesmo exame.
+// Processa em lotes menores (~40 nomes por chamada): listas grandes (uma casa com anos de
+// exames facilmente passa de 100 nomes distintos) geram uma resposta longa demais pra uma
+// única chamada sem estourar o limite de tokens de saída.
+const GROUPING_CHUNK_SIZE = 40;
+
 app.post("/api/exam-catalog/suggest-groups", async (req, res) => {
   try {
     const { names } = req.body || {};
     if (!Array.isArray(names) || names.length === 0) return res.status(400).json({ error: "Nenhum nome para agrupar" });
-    const text = await callClaude([{ role: "user", content: buildExamGroupingPrompt(names) }], 3000);
-    const parsed = parseExamJson(text);
-    const grupos = Array.isArray(parsed.grupos) ? parsed.grupos : [];
-    const groups = grupos
-      .map((g) => ({
-        names: (Array.isArray(g.indices) ? g.indices : []).map((i) => names[i]).filter(Boolean),
-        suggestedName: g.nomePadrao || "",
-      }))
-      .filter((g) => g.names.length > 0);
-    res.json({ groups });
+
+    const allGroups = [];
+    for (let start = 0; start < names.length; start += GROUPING_CHUNK_SIZE) {
+      const chunk = names.slice(start, start + GROUPING_CHUNK_SIZE);
+      const text = await callClaude([{ role: "user", content: buildExamGroupingPrompt(chunk) }], 4000);
+      const parsed = parseExamJson(text);
+      const grupos = Array.isArray(parsed.grupos) ? parsed.grupos : [];
+      grupos.forEach((g) => {
+        const groupNames = (Array.isArray(g.indices) ? g.indices : []).map((i) => chunk[i]).filter(Boolean);
+        if (groupNames.length > 0) allGroups.push({ names: groupNames, suggestedName: g.nomePadrao || "" });
+      });
+    }
+    res.json({ groups: allGroups });
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao sugerir agrupamentos" });
   }

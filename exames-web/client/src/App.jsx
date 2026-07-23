@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-23b · Catálogo de exames: unificação de nomes e referências é feita manualmente na tela de reconciliação (Catálogo de exames, dentro do perfil) — a importação de laudos ainda não sugere padronização automática";
+const APP_BUILD = "2026-07-23c · Corrigido: 'Sugerir agrupamentos com IA' processava a lista inteira de exames pendentes numa só chamada e estourava o limite de tokens em casas com muitos exames — agora processa em lotes de 40";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
