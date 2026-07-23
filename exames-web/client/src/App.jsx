@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-23c · Corrigido: 'Sugerir agrupamentos com IA' processava a lista inteira de exames pendentes numa só chamada e estourava o limite de tokens em casas com muitos exames — agora processa em lotes de 40";
+const APP_BUILD = "2026-07-23d · No histórico de um exame (gráfico de evolução), cada medição agora tem um link pra abrir o laudo original em PDF, quando disponível";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -1514,7 +1514,7 @@ function ExamEvolutionModal({ examName, orderedBatchIds, batches, profileId, onC
       const r = b.results.find((x) => x.name === examName);
       if (!r) return null;
       const num = parseFloat(String(r.value).replace(",", "."));
-      return { date: b.date, value: isNaN(num) ? null : num, raw: r.value, unit: r.unit, status: r.status, ref: r.ref, category: r.category };
+      return { date: b.date, value: isNaN(num) ? null : num, raw: r.value, unit: r.unit, status: r.status, ref: r.ref, category: r.category, batchId: b.id, hasPdf: !!b.hasPdf };
     })
     .filter(Boolean)
     .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
@@ -1599,11 +1599,24 @@ function ExamEvolutionModal({ examName, orderedBatchIds, batches, profileId, onC
         {points.slice().reverse().map((p, i) => {
           const meta = STATUS_META[p.status] || STATUS_META.N;
           return (
-            <div key={i} className="flex items-center justify-between px-3 py-2 text-sm">
+            <div key={i} className="flex items-center justify-between px-3 py-2 text-sm gap-2">
               <span className="text-slate-500">{fmtDate(p.date)}</span>
               <span className="text-slate-800">{p.raw} {p.unit}</span>
               <span className="text-slate-400 text-xs hidden sm:inline">ref: {p.ref || "—"}</span>
               <span className={`text-xs px-2 py-0.5 rounded-full ${meta.chip}`}>{meta.label}</span>
+              {p.hasPdf ? (
+                <a
+                  href={api.pdfUrl(profileId, p.batchId)}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Abrir laudo original"
+                  className="text-slate-400 hover:text-slate-800 shrink-0"
+                >
+                  <FileText size={15} />
+                </a>
+              ) : (
+                <span className="w-[15px] shrink-0" />
+              )}
             </div>
           );
         })}

@@ -269,7 +269,7 @@ app.get("/api/profiles/:profileId/batches", (req, res) => {
 
 app.get("/api/profiles/:profileId/batches/:batchId", (req, res) => {
   const { batchId } = req.params;
-  const batch = db.prepare("SELECT id, date, lab, doctor FROM batches WHERE id = ?").get(batchId);
+  const batch = db.prepare("SELECT id, date, lab, doctor, has_pdf as hasPdf FROM batches WHERE id = ?").get(batchId);
   if (!batch) return res.status(404).json({ error: "Não encontrado" });
   const results = db
     .prepare("SELECT id, name, value, unit, ref, status, category, catalog_id as catalogId, raw_name as rawName FROM results WHERE batch_id = ?")
