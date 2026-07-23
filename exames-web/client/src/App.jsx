@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo, forwardRef, useImperativeHandle } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Dot } from "recharts";
 import {
   Upload, FileText, Plus, User, TrendingUp, TrendingDown, Minus, AlertTriangle,
@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-23i · Novo recurso: Desafios entre perfis. Criar/aceitar convites fica dentro de Editar perfil (lápis); acompanhamento do ranking tem um novo card no Painel";
+const APP_BUILD = "2026-07-23l · Botões de cada aba (Saúde física, Sintomas, Atividades, Nfe exames) movidos pro topo do perfil, igual à aba Exames; e deixado claro que pressão arterial na Saúde física é opcional (nunca foi obrigatória, só não estava marcada como tal)";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -1255,6 +1255,10 @@ function ProfileScreen({ profile, allProfiles, onBack, initialTab, onProfileUpda
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const fileInputRef = useRef(null);
   const photoInputRef = useRef(null);
+  const bodyScreenRef = useRef(null);
+  const symptomsScreenRef = useRef(null);
+  const activitiesScreenRef = useRef(null);
+  const invoicesScreenRef = useRef(null);
 
   // Troca de aba "normal" (clique direto na aba): sempre limpa o filtro de exames
   // vindo dos cards do Painel, pra não ficar um filtro "escondido" ativo.
@@ -1457,6 +1461,31 @@ function ProfileScreen({ profile, allProfiles, onBack, initialTab, onProfileUpda
               </button>
             </>
           )}
+          {tab === "corpo" && (
+            <>
+              <button onClick={() => bodyScreenRef.current?.openPhotoPicker()} className="flex items-center gap-1.5 text-slate-600 text-sm font-medium px-3.5 py-2 rounded-lg border border-slate-200 hover:bg-slate-50">
+                <Camera size={15} /> Enviar foto
+              </button>
+              <button onClick={() => bodyScreenRef.current?.openNewMeasurement()} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800">
+                <Plus size={15} /> Nova medição
+              </button>
+            </>
+          )}
+          {tab === "sintomas" && (
+            <button onClick={() => symptomsScreenRef.current?.openNew()} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800">
+              <Plus size={15} /> Novo sintoma
+            </button>
+          )}
+          {tab === "atividades" && (
+            <button onClick={() => activitiesScreenRef.current?.openNew()} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800">
+              <Plus size={15} /> Nova atividade
+            </button>
+          )}
+          {tab === "notas" && (
+            <button onClick={() => invoicesScreenRef.current?.openFilePicker()} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800">
+              <Upload size={15} /> Enviar nota fiscal
+            </button>
+          )}
         </div>
       </div>
 
@@ -1495,7 +1524,7 @@ function ProfileScreen({ profile, allProfiles, onBack, initialTab, onProfileUpda
           onClick={() => goToTab("notas")}
           className={`flex items-center gap-1.5 text-sm px-3 py-2 border-b-2 -mb-px whitespace-nowrap ${tab === "notas" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
         >
-          <Receipt size={14} /> Notas fiscais (IR)
+          <Receipt size={14} /> Nfe exames
         </button>
       </div>
 
@@ -1522,14 +1551,15 @@ function ProfileScreen({ profile, allProfiles, onBack, initialTab, onProfileUpda
         />
       )}
 
-      {tab === "corpo" && <BodyCompositionScreen profileId={profile.id} profile={profile} />}
+      {tab === "corpo" && <BodyCompositionScreen ref={bodyScreenRef} profileId={profile.id} profile={profile} />}
 
-      {tab === "sintomas" && <SymptomsScreen profileId={profile.id} />}
+      {tab === "sintomas" && <SymptomsScreen ref={symptomsScreenRef} profileId={profile.id} />}
 
-      {tab === "atividades" && <ActivitiesScreen profileId={profile.id} />}
+      {tab === "atividades" && <ActivitiesScreen ref={activitiesScreenRef} profileId={profile.id} />}
 
       {tab === "notas" && (
         <InvoicesPanel
+          ref={invoicesScreenRef}
           profileId={profile.id}
           pendingReview={pendingInvoiceReview}
           onConsumePendingReview={() => setPendingInvoiceReview(null)}
@@ -1688,6 +1718,7 @@ function CountCard({ label, value, sub }) {
 
 function ExamTable({ results, onSelectExam }) {
   const [filter, setFilter] = useState("all");
+  const [collapsed, setCollapsed] = useState({});
   const grouped = {};
   for (const r of results) {
     const cat = r.category || "Outro";
@@ -1696,6 +1727,7 @@ function ExamTable({ results, onSelectExam }) {
   }
   const cnt = counts(results);
   const filterFn = (r) => filter === "all" || r.status === filter;
+  const toggleCollapsed = (cat) => setCollapsed((prev) => ({ ...prev, [cat]: !prev[cat] }));
 
   return (
     <div className="border border-slate-200 rounded-xl overflow-hidden">
@@ -1713,10 +1745,17 @@ function ExamTable({ results, onSelectExam }) {
         {Object.entries(grouped).map(([cat, items]) => {
           const visible = items.filter(filterFn);
           if (!visible.length) return null;
+          const isCollapsed = !!collapsed[cat];
           return (
             <div key={cat}>
-              <p className="text-xs font-medium text-slate-400 uppercase tracking-wide px-4 pt-3 pb-1">{cat}</p>
-              {visible.map((r) => {
+              <button
+                onClick={() => toggleCollapsed(cat)}
+                className="w-full flex items-center gap-1.5 px-4 pt-3 pb-1 hover:bg-slate-50"
+              >
+                <ChevronRight size={12} className={`text-slate-400 transition-transform ${isCollapsed ? "" : "rotate-90"}`} />
+                <span className="text-xs font-medium text-slate-400 uppercase tracking-wide">{cat} ({visible.length})</span>
+              </button>
+              {!isCollapsed && visible.map((r) => {
                 const meta = STATUS_META[r.status] || STATUS_META.N;
                 return (
                   <div key={r.id} onClick={() => onSelectExam(r.name)} className="flex items-center justify-between px-4 py-2.5 hover:bg-slate-50 cursor-pointer">
@@ -2421,7 +2460,7 @@ function ExamCatalogModal({ onClose, onChanged }) {
   );
 }
 
-function BodyCompositionScreen({ profileId, profile }) {
+const BodyCompositionScreen = forwardRef(function BodyCompositionScreen({ profileId, profile }, ref) {
   const [entries, setEntries] = useState(null);
   const [formEntry, setFormEntry] = useState(null); // { ...entry } when editing, {} when adding new, null when closed
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -2431,6 +2470,11 @@ function BodyCompositionScreen({ profileId, profile }) {
   const [photoHeightNote, setPhotoHeightNote] = useState(null);
   const [metricInfoRequest, setMetricInfoRequest] = useState(null);
   const photoInputRef = useRef(null);
+
+  useImperativeHandle(ref, () => ({
+    openPhotoPicker: () => photoInputRef.current?.click(),
+    openNewMeasurement: () => setFormEntry({ date: new Date().toISOString().slice(0, 10) }),
+  }), []);
 
   const load = useCallback(async () => {
     const rows = await api.getBodyEntries(profileId);
@@ -2517,24 +2561,9 @@ function BodyCompositionScreen({ profileId, profile }) {
         <p className="text-sm text-slate-500">
           {entries.length} mediç{entries.length !== 1 ? "ões" : "ão"} registrada{entries.length !== 1 ? "s" : ""}
           {profile?.heightCm ? ` · altura: ${fmtNum(profile.heightCm, 1)} cm (definida no perfil)` : " · altura não definida no perfil"}
+          {photoLoading ? " · Lendo foto..." : ""}
         </p>
-        <div className="flex items-center gap-2">
-          <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePhoto(f); e.target.value = ""; }} />
-          <button
-            onClick={() => photoInputRef.current?.click()}
-            disabled={photoLoading}
-            className="flex items-center gap-1.5 border border-slate-300 text-slate-700 text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50"
-          >
-            {photoLoading ? <Loader2 size={15} className="animate-spin" /> : <Camera size={15} />}
-            {photoLoading ? "Lendo foto..." : "Enviar foto"}
-          </button>
-          <button
-            onClick={() => setFormEntry({ date: new Date().toISOString().slice(0, 10) })}
-            className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800"
-          >
-            <Plus size={15} /> Nova medição
-          </button>
-        </div>
+        <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePhoto(f); e.target.value = ""; }} />
       </div>
 
       {!profile?.heightCm && (
@@ -2672,7 +2701,7 @@ function BodyCompositionScreen({ profileId, profile }) {
       )}
     </div>
   );
-}
+});
 
 function BodyEntryRow({ entry, profileId, onEdit, onDelete }) {
   return (
@@ -2880,7 +2909,7 @@ function BodyEntryModal({ entry, onCancel, onSave }) {
     if (trimmed) {
       const match = trimmed.match(/^(\d{2,3})\s*\/\s*(\d{2,3})$/);
       if (!match) {
-        setError('Pressão arterial deve estar no formato "sistólica/diastólica", ex: 120/80.');
+        setError('Pressão arterial deve estar no formato "sistólica/diastólica", ex: 120/80 — ou deixe em branco, é opcional.');
         return;
       }
       systolicBp = Number(match[1]);
@@ -2922,7 +2951,7 @@ function BodyEntryModal({ entry, onCancel, onSave }) {
             inputMode="numeric"
             value={bloodPressureText}
             onChange={(e) => setBloodPressureText(e.target.value)}
-            placeholder="Ex: 120/80"
+            placeholder="Opcional, ex: 120/80"
             className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm"
           />
         </div>
@@ -2978,10 +3007,14 @@ const SEVERITY_META = {
   intenso: { label: "Intenso", chip: "bg-red-100 text-red-700" },
 };
 
-function SymptomsScreen({ profileId }) {
+const SymptomsScreen = forwardRef(function SymptomsScreen({ profileId }, ref) {
   const [symptoms, setSymptoms] = useState(null);
   const [formEntry, setFormEntry] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
+
+  useImperativeHandle(ref, () => ({
+    openNew: () => setFormEntry({ date: new Date().toISOString().slice(0, 10), description: "", severity: "", status: "ativo" }),
+  }), []);
 
   const load = useCallback(async () => {
     setSymptoms(await api.getSymptoms(profileId));
@@ -3018,17 +3051,9 @@ function SymptomsScreen({ profileId }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-slate-500">
-          {symptoms.length} sintoma{symptoms.length !== 1 ? "s" : ""} registrado{symptoms.length !== 1 ? "s" : ""}
-        </p>
-        <button
-          onClick={() => setFormEntry({ date: new Date().toISOString().slice(0, 10), description: "", severity: "", status: "ativo" })}
-          className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800"
-        >
-          <Plus size={15} /> Novo sintoma
-        </button>
-      </div>
+      <p className="text-sm text-slate-500 mb-4">
+        {symptoms.length} sintoma{symptoms.length !== 1 ? "s" : ""} registrado{symptoms.length !== 1 ? "s" : ""}
+      </p>
 
       <div className="mb-4 flex items-start gap-2 text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2">
         <Info size={13} className="mt-0.5 shrink-0" />
@@ -3087,7 +3112,7 @@ function SymptomsScreen({ profileId }) {
       )}
     </div>
   );
-}
+});
 
 function SymptomModal({ entry, onCancel, onSave }) {
   const [date, setDate] = useState(entry.date || new Date().toISOString().slice(0, 10));
@@ -3202,10 +3227,14 @@ function daysAgo(n) {
   return d.toISOString().slice(0, 10);
 }
 
-function ActivitiesScreen({ profileId }) {
+const ActivitiesScreen = forwardRef(function ActivitiesScreen({ profileId }, ref) {
   const [activities, setActivities] = useState(null);
   const [formEntry, setFormEntry] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
+
+  useImperativeHandle(ref, () => ({
+    openNew: () => setFormEntry({ date: new Date().toISOString().slice(0, 10), activityType: "", durationMin: "", intensity: "", distanceKm: "", caloriesKcal: "", notes: "" }),
+  }), []);
 
   const load = useCallback(async () => {
     setActivities(await api.getActivities(profileId));
@@ -3241,17 +3270,9 @@ function ActivitiesScreen({ profileId }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-slate-500">
-          {activities.length} atividade{activities.length !== 1 ? "s" : ""} registrada{activities.length !== 1 ? "s" : ""}
-        </p>
-        <button
-          onClick={() => setFormEntry({ date: new Date().toISOString().slice(0, 10), activityType: "", durationMin: "", intensity: "", distanceKm: "", caloriesKcal: "", notes: "" })}
-          className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800"
-        >
-          <Plus size={15} /> Nova atividade
-        </button>
-      </div>
+      <p className="text-sm text-slate-500 mb-4">
+        {activities.length} atividade{activities.length !== 1 ? "s" : ""} registrada{activities.length !== 1 ? "s" : ""}
+      </p>
 
       <ActivityIntegrations profileId={profileId} onSynced={load} />
 
@@ -3325,7 +3346,7 @@ function ActivitiesScreen({ profileId }) {
       )}
     </div>
   );
-}
+});
 
 function ActivityModal({ entry, onCancel, onSave }) {
   const isPreset = ACTIVITY_TYPE_OPTIONS.some((o) => o.value === entry.activityType);
@@ -3831,7 +3852,7 @@ function DashboardScreen({ profileId, profileName, profile, allProfiles, onGoTo 
 
 // ---------- Invoices (Notas fiscais / IR) ----------
 
-function InvoicesPanel({ profileId, pendingReview, onConsumePendingReview, onWaUploadResolved }) {
+const InvoicesPanel = forwardRef(function InvoicesPanel({ profileId, pendingReview, onConsumePendingReview, onWaUploadResolved }, ref) {
   const [invoices, setInvoices] = useState(null);
   const [year, setYear] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -3840,6 +3861,10 @@ function InvoicesPanel({ profileId, pendingReview, onConsumePendingReview, onWaU
   const [reviewFromWaId, setReviewFromWaId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const fileInputRef = useRef(null);
+
+  useImperativeHandle(ref, () => ({
+    openFilePicker: () => fileInputRef.current?.click(),
+  }), []);
 
   const load = useCallback(async () => {
     const list = await api.getInvoices(profileId);
@@ -3945,13 +3970,8 @@ function InvoicesPanel({ profileId, pendingReview, onConsumePendingReview, onWaU
             {years.map((y) => <option key={y} value={y}>{y}</option>)}
           </select>
         </div>
-        <div className="flex items-center gap-2">
-          <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
-          <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
-            {uploading ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
-            {uploading ? "Lendo PDF..." : "Enviar nota fiscal"}
-          </button>
-        </div>
+        <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
+        {uploading && <span className="text-xs text-slate-400 flex items-center gap-1.5"><Loader2 size={13} className="animate-spin" /> Lendo PDF...</span>}
       </div>
 
       {uploadError && (
@@ -4041,7 +4061,7 @@ function InvoicesPanel({ profileId, pendingReview, onConsumePendingReview, onWaU
       {reviewData && <ReviewInvoiceModal data={reviewData} onCancel={() => { setReviewData(null); setReviewFromWaId(null); }} onConfirm={saveInvoiceHandler} />}
     </div>
   );
-}
+});
 
 function ReviewInvoiceModal({ data, onCancel, onConfirm }) {
   const [date, setDate] = useState(data.date || "");
