@@ -50,7 +50,34 @@ CREATE TABLE IF NOT EXISTS results (
   unit TEXT,
   ref TEXT,
   status TEXT,
-  category TEXT
+  category TEXT,
+  catalog_id TEXT,
+  raw_name TEXT,
+  raw_ref TEXT
+);
+
+-- Catálogo de "exames padrão": um nome, unidade e referência únicos por exame,
+-- usados independente de qual laboratório emitiu o laudo (resolve nomes e
+-- referências diferentes entre laboratórios para o mesmo exame).
+CREATE TABLE IF NOT EXISTS exam_catalog (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  unit TEXT,
+  ref TEXT,
+  category TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- Mapeia um nome de exame exatamente como veio de algum laudo (normalizado:
+-- minúsculo e sem espaços nas pontas) para uma entrada do catálogo, para que a
+-- próxima vez que aquele laboratório usar a mesma redação, o app reconheça
+-- automaticamente sem precisar perguntar de novo.
+CREATE TABLE IF NOT EXISTS exam_aliases (
+  id TEXT PRIMARY KEY,
+  raw_name TEXT NOT NULL UNIQUE,
+  catalog_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS alerts (
@@ -265,6 +292,21 @@ const alertsCols = db.prepare("PRAGMA table_info(alerts)").all().map((c) => c.na
 if (!alertsCols.includes("based_on_signature")) {
   db.exec("ALTER TABLE alerts ADD COLUMN based_on_signature TEXT");
 }
+
+// Migração leve: bancos criados antes do catálogo de exames padronizados não tinham
+// essas colunas em results (nome/referência final resolvida fica em name/ref; o que
+// veio literalmente do laudo fica guardado à parte em raw_name/raw_ref).
+const resultsCols = db.prepare("PRAGMA table_info(results)").all().map((c) => c.name);
+if (!resultsCols.includes("catalog_id")) {
+  db.exec("ALTER TABLE results ADD COLUMN catalog_id TEXT");
+}
+if (!resultsCols.includes("raw_name")) {
+  db.exec("ALTER TABLE results ADD COLUMN raw_name TEXT");
+}
+if (!resultsCols.includes("raw_ref")) {
+  db.exec("ALTER TABLE results ADD COLUMN raw_ref TEXT");
+}
+db.exec("CREATE INDEX IF NOT EXISTS idx_results_catalog ON results(catalog_id)");
 
 export default db;
 export { pdfDir, bodyPhotoDir, invoiceDir, whatsappDir };

@@ -11,7 +11,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-22g · Recebe exames e notas fiscais pelo WhatsApp (número único + senha de 4 dígitos no perfil), com fila de revisão antes de salvar";
+const APP_BUILD = "2026-07-23b · Catálogo de exames: unificação de nomes e referências é feita manualmente na tela de reconciliação (Catálogo de exames, dentro do perfil) — a importação de laudos ainda não sugere padronização automática";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
@@ -925,6 +925,7 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
   const [waInboxOpen, setWaInboxOpen] = useState(false);
   const [reviewFromWaId, setReviewFromWaId] = useState(null); // id pendente sendo revisado (exame)
   const [pendingInvoiceReview, setPendingInvoiceReview] = useState(null); // { data, uploadId } pra Notas fiscais
+  const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const fileInputRef = useRef(null);
 
   // Troca de aba "normal" (clique direto na aba): sempre limpa o filtro de exames
@@ -1113,6 +1114,9 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
         </div>
         {tab === "exames" && (
           <div className="flex items-center gap-2">
+            <button onClick={() => setCatalogModalOpen(true)} className="flex items-center gap-1.5 text-slate-600 text-sm font-medium px-3.5 py-2 rounded-lg border border-slate-200 hover:bg-slate-50">
+              <ClipboardEdit size={15} /> Catálogo de exames
+            </button>
             <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
             <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex items-center gap-1.5 bg-slate-900 text-white text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
               {uploading ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
@@ -1242,6 +1246,7 @@ function ProfileScreen({ profile, onBack, initialTab, onProfileUpdate }) {
       {selectedExam && <ExamEvolutionModal examName={selectedExam} orderedBatchIds={orderedBatchIds} batches={batches} profileId={profile.id} onClose={() => setSelectedExam(null)} />}
 
       {reviewData && <ReviewModal data={reviewData} onCancel={() => { setReviewData(null); setReviewFromWaId(null); }} onConfirm={saveBatch} />}
+      {catalogModalOpen && <ExamCatalogModal onClose={() => setCatalogModalOpen(false)} onChanged={load} />}
       </>
       )}
 
@@ -1694,7 +1699,7 @@ function ReviewModal({ data, onCancel, onConfirm }) {
   return (
     <ModalShell onClose={onCancel} title="Confira os exames extraídos" wide>
       <p className="text-xs text-slate-500 mb-3 flex items-center gap-1.5">
-        <ClipboardEdit size={13} /> Revise e corrija antes de salvar — a leitura automática pode errar.
+        <ClipboardEdit size={13} /> Revise e corrija antes de salvar — a leitura automática pode errar. Para unificar nomes/referências entre laboratórios, use o "Catálogo de exames" na aba Exames depois de salvar.
       </p>
       <div className="grid grid-cols-3 gap-3 mb-4">
         <div>
@@ -1759,6 +1764,303 @@ function ReviewModal({ data, onCancel, onConfirm }) {
           Salvar no histórico
         </button>
       </div>
+    </ModalShell>
+  );
+}
+
+function ExamCatalogModal({ onClose, onChanged }) {
+  const [subTab, setSubTab] = useState("unificar"); // "unificar" | "catalogo"
+  const [catalog, setCatalog] = useState(null);
+  const [unmatched, setUnmatched] = useState(null);
+  const [error, setError] = useState(null);
+
+  const [selected, setSelected] = useState({}); // { [rawName]: true }
+  const [groups, setGroups] = useState(null); // sugestões de agrupamento da IA
+  const [suggesting, setSuggesting] = useState(false);
+  const [manualMerge, setManualMerge] = useState(null); // { names, mode: "existing"|"new", catalogId, name, unit, ref }
+
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ name: "", unit: "", ref: "", category: "" });
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [c, u] = await Promise.all([api.getExamCatalog(), api.getUnmatchedExamNames()]);
+      setCatalog(c);
+      setUnmatched(u);
+    } catch (e) {
+      setError(e.message || "Erro ao carregar catálogo de exames");
+    }
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  const toggleSelected = (name) => setSelected((prev) => ({ ...prev, [name]: !prev[name] }));
+  const selectedNames = Object.keys(selected).filter((n) => selected[n]);
+
+  const runSuggestGroups = async () => {
+    setSuggesting(true);
+    setError(null);
+    try {
+      const names = (unmatched || []).map((u) => u.name);
+      const { groups: g } = await api.suggestExamGroups(names);
+      // Só mostra grupos com 2+ nomes (grupos únicos não precisam de ação de unificação).
+      setGroups(g.filter((grp) => grp.names.length > 1));
+    } catch (e) {
+      setError(e.message || "Não consegui gerar sugestões agora.");
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
+  const confirmGroup = async (group) => {
+    setError(null);
+    try {
+      const firstMatch = (unmatched || []).find((u) => u.name === group.names[0]);
+      await api.reconcileExamNames({
+        names: group.names,
+        newName: group.suggestedName,
+        unit: firstMatch?.unit || "",
+        ref: firstMatch?.ref || "",
+      });
+      setGroups((prev) => prev.filter((g) => g !== group));
+      await loadAll();
+      onChanged && onChanged();
+    } catch (e) {
+      setError(e.message || "Erro ao unificar esse grupo");
+    }
+  };
+
+  const dismissGroup = (group) => setGroups((prev) => prev.filter((g) => g !== group));
+
+  const openManualMerge = () => {
+    if (selectedNames.length === 0) return;
+    const first = (unmatched || []).find((u) => u.name === selectedNames[0]);
+    setManualMerge({ names: selectedNames, mode: "new", catalogId: "", name: selectedNames[0], unit: first?.unit || "", ref: first?.ref || "" });
+  };
+
+  const confirmManualMerge = async () => {
+    if (!manualMerge) return;
+    setError(null);
+    try {
+      const payload = manualMerge.mode === "existing"
+        ? { names: manualMerge.names, catalogId: manualMerge.catalogId }
+        : { names: manualMerge.names, newName: manualMerge.name, unit: manualMerge.unit, ref: manualMerge.ref };
+      await api.reconcileExamNames(payload);
+      setManualMerge(null);
+      setSelected({});
+      await loadAll();
+      onChanged && onChanged();
+    } catch (e) {
+      setError(e.message || "Erro ao unificar exames selecionados");
+    }
+  };
+
+  const startEdit = (c) => {
+    setEditingId(c.id);
+    setEditForm({ name: c.name, unit: c.unit || "", ref: c.ref || "", category: c.category || "Outro" });
+  };
+
+  const saveEdit = async (id) => {
+    setError(null);
+    try {
+      await api.updateExamCatalogEntry(id, editForm);
+      setEditingId(null);
+      await loadAll();
+      onChanged && onChanged();
+    } catch (e) {
+      setError(e.message || "Erro ao salvar exame padrão");
+    }
+  };
+
+  const removeEntry = async (id) => {
+    await api.deleteExamCatalogEntry(id);
+    setConfirmDeleteId(null);
+    await loadAll();
+    onChanged && onChanged();
+  };
+
+  return (
+    <ModalShell onClose={onClose} title="Catálogo de exames" wide>
+      <p className="text-xs text-slate-500 mb-4">
+        Unifique exames com nomes diferentes entre laboratórios e mantenha uma única referência para cada um. Isso vale para todo o histórico já salvo — e para novos laudos, o app já sugere a padronização na hora de revisar.
+      </p>
+
+      <div className="flex items-center gap-1 mb-4 border-b border-slate-200">
+        <button
+          onClick={() => setSubTab("unificar")}
+          className={`text-sm px-3 py-2 border-b-2 -mb-px ${subTab === "unificar" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+        >
+          Unificar existentes {unmatched && unmatched.length > 0 ? `(${unmatched.length})` : ""}
+        </button>
+        <button
+          onClick={() => setSubTab("catalogo")}
+          className={`text-sm px-3 py-2 border-b-2 -mb-px ${subTab === "catalogo" ? "border-slate-900 text-slate-900 font-medium" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+        >
+          Exames padrão {catalog && catalog.length > 0 ? `(${catalog.length})` : ""}
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-3 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+
+      {subTab === "unificar" && (
+        <div>
+          {unmatched === null ? (
+            <div className="flex justify-center py-10 text-slate-400"><Loader2 className="animate-spin" size={20} /></div>
+          ) : unmatched.length === 0 ? (
+            <div className="border border-dashed border-slate-300 rounded-xl py-10 text-center text-slate-400 text-sm">
+              Nenhum exame pendente de padronização — tudo já está unificado.
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+                <button
+                  onClick={runSuggestGroups}
+                  disabled={suggesting}
+                  className="text-sm px-3 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {suggesting ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                  {suggesting ? "Analisando..." : "Sugerir agrupamentos com IA"}
+                </button>
+                {selectedNames.length > 0 && (
+                  <button onClick={openManualMerge} className="text-sm px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">
+                    Unificar {selectedNames.length} selecionado{selectedNames.length !== 1 ? "s" : ""} manualmente
+                  </button>
+                )}
+              </div>
+
+              {groups && groups.length > 0 && (
+                <div className="mb-4 space-y-2">
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Sugestões da IA</p>
+                  {groups.map((g, i) => (
+                    <div key={i} className="border border-slate-200 rounded-lg px-3 py-2.5 bg-slate-50">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span className="text-sm font-medium text-slate-800">{g.suggestedName}</span>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => confirmGroup(g)} className="text-xs px-2.5 py-1 rounded-md bg-emerald-600 text-white hover:bg-emerald-700">Confirmar</button>
+                          <button onClick={() => dismissGroup(g)} className="text-xs text-slate-400 hover:text-slate-700">Ignorar</button>
+                        </div>
+                      </div>
+                      <p className="text-xs text-slate-500">{g.names.join(" · ")}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <p className="text-xs text-slate-400 mb-2">Ou selecione manualmente os nomes que são o mesmo exame:</p>
+              <div className="max-h-72 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100">
+                {unmatched.map((u) => (
+                  <label key={u.name} className="flex items-center gap-3 px-3 py-2 hover:bg-slate-50 cursor-pointer text-sm">
+                    <input type="checkbox" checked={!!selected[u.name]} onChange={() => toggleSelected(u.name)} />
+                    <span className="flex-1 text-slate-800">{u.name}</span>
+                    <span className="text-xs text-slate-400">{u.count}x</span>
+                    <span className="text-xs text-slate-400 hidden sm:inline">ref: {u.ref || "—"}</span>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+
+          {manualMerge && (
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-xl p-5 w-full max-w-md">
+                <h3 className="text-sm font-medium text-slate-800 mb-3">Unificar {manualMerge.names.length} exames</h3>
+                <p className="text-xs text-slate-500 mb-3">{manualMerge.names.join(" · ")}</p>
+                <div className="flex items-center gap-3 mb-3 text-sm">
+                  <label className="flex items-center gap-1.5">
+                    <input type="radio" checked={manualMerge.mode === "new"} onChange={() => setManualMerge((m) => ({ ...m, mode: "new" }))} /> Criar novo exame padrão
+                  </label>
+                  <label className="flex items-center gap-1.5">
+                    <input type="radio" checked={manualMerge.mode === "existing"} onChange={() => setManualMerge((m) => ({ ...m, mode: "existing" }))} /> Usar exame já cadastrado
+                  </label>
+                </div>
+                {manualMerge.mode === "new" ? (
+                  <div className="space-y-2">
+                    <input value={manualMerge.name} onChange={(e) => setManualMerge((m) => ({ ...m, name: e.target.value }))} placeholder="Nome padrão" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input value={manualMerge.unit} onChange={(e) => setManualMerge((m) => ({ ...m, unit: e.target.value }))} placeholder="Unidade" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+                      <input value={manualMerge.ref} onChange={(e) => setManualMerge((m) => ({ ...m, ref: e.target.value }))} placeholder="Referência única" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+                    </div>
+                  </div>
+                ) : (
+                  <select value={manualMerge.catalogId} onChange={(e) => setManualMerge((m) => ({ ...m, catalogId: e.target.value }))} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+                    <option value="">Selecione...</option>
+                    {(catalog || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                )}
+                <div className="flex justify-end gap-2 mt-4">
+                  <button onClick={() => setManualMerge(null)} className="text-sm px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100">Cancelar</button>
+                  <button
+                    disabled={manualMerge.mode === "new" ? !manualMerge.name.trim() : !manualMerge.catalogId}
+                    onClick={confirmManualMerge}
+                    className="text-sm px-3.5 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40 hover:bg-slate-800"
+                  >
+                    Unificar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {subTab === "catalogo" && (
+        <div>
+          {catalog === null ? (
+            <div className="flex justify-center py-10 text-slate-400"><Loader2 className="animate-spin" size={20} /></div>
+          ) : catalog.length === 0 ? (
+            <div className="border border-dashed border-slate-300 rounded-xl py-10 text-center text-slate-400 text-sm">
+              Nenhum exame padrão cadastrado ainda.
+            </div>
+          ) : (
+            <div className="max-h-96 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100">
+              {catalog.map((c) => (
+                <div key={c.id} className="px-3 py-2.5">
+                  {editingId === c.id ? (
+                    <div className="space-y-2">
+                      <input value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" placeholder="Nome" />
+                      <div className="grid grid-cols-2 gap-2">
+                        <input value={editForm.unit} onChange={(e) => setEditForm((f) => ({ ...f, unit: e.target.value }))} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" placeholder="Unidade" />
+                        <input value={editForm.ref} onChange={(e) => setEditForm((f) => ({ ...f, ref: e.target.value }))} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" placeholder="Referência" />
+                      </div>
+                      <div className="flex justify-end gap-2">
+                        <button onClick={() => setEditingId(null)} className="text-xs px-2.5 py-1.5 rounded-md text-slate-500 hover:bg-slate-100">Cancelar</button>
+                        <button onClick={() => saveEdit(c.id)} className="text-xs px-2.5 py-1.5 rounded-md bg-slate-900 text-white hover:bg-slate-800">Salvar</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm text-slate-800 truncate">{c.name}</p>
+                        <p className="text-xs text-slate-400">
+                          ref: {c.ref || "—"} {c.unit ? `(${c.unit})` : ""} · {c.resultCount} resultado{c.resultCount !== 1 ? "s" : ""} · {c.aliasCount} apelido{c.aliasCount !== 1 ? "s" : ""}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button onClick={() => startEdit(c)} className="text-slate-400 hover:text-slate-800 p-1.5"><Pencil size={14} /></button>
+                        <button onClick={() => setConfirmDeleteId(c.id)} className="text-slate-400 hover:text-red-500 p-1.5"><Trash2 size={14} /></button>
+                      </div>
+                    </div>
+                  )}
+                  {confirmDeleteId === c.id && (
+                    <div className="mt-2 flex items-center justify-between gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
+                      <span>Remover esse exame padrão? Os resultados ligados a ele voltam a ficar sem padronização (não são apagados).</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button onClick={() => setConfirmDeleteId(null)} className="underline">Cancelar</button>
+                        <button onClick={() => removeEntry(c.id)} className="font-medium">Remover</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </ModalShell>
   );
 }

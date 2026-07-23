@@ -352,6 +352,55 @@ export function invoicePdfUrl(profileId, invoiceId) {
   return `/api/profiles/${profileId}/invoices/${invoiceId}/pdf`;
 }
 
+// ---------- Catálogo de exames padrão ----------
+
+export async function getExamCatalog() {
+  const r = await fetch("/api/exam-catalog");
+  return r.json();
+}
+
+export async function getUnmatchedExamNames() {
+  const r = await fetch("/api/exam-catalog/unmatched");
+  return r.json();
+}
+
+export async function updateExamCatalogEntry(id, payload) {
+  const r = await fetch(`/api/exam-catalog/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao atualizar exame do catálogo");
+  return data;
+}
+
+export async function deleteExamCatalogEntry(id) {
+  await fetch(`/api/exam-catalog/${id}`, { method: "DELETE" });
+}
+
+export async function reconcileExamNames(payload) {
+  const r = await fetch("/api/exam-catalog/reconcile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao unificar exames");
+  return data;
+}
+
+export async function suggestExamGroups(names) {
+  const r = await fetch("/api/exam-catalog/suggest-groups", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ names }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Erro ao sugerir agrupamentos");
+  return data;
+}
+
 // ---------- WhatsApp: fila de pendências ----------
 
 export async function getWhatsappUploads(profileId) {

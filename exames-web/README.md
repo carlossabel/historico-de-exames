@@ -226,6 +226,34 @@ parte de receber pelo WhatsApp fica inativa).
   fica explícito na interface, mas vale reforçar para quem for usar o
   sistema.
 
+## Catálogo de exames (unificar nomes e referências entre laboratórios)
+
+Laboratórios diferentes escrevem o mesmo exame de formas diferentes (ex: "Hemoglobina",
+"Hb", "HGB") e usam faixas de referência ligeiramente diferentes. O app resolve isso com
+um catálogo de "exames padrão": um nome, uma unidade e uma referência únicos por exame,
+usados independente de qual laudo trouxe o resultado.
+
+**Por enquanto esse processo é 100% manual**, de propósito — a ideia é usar a tela de
+reconciliação um tempo, ganhar confiança no resultado, e só depois automatizar a sugestão
+no momento da importação de um laudo novo.
+
+- **Ao importar um laudo** (PDF manual ou pelo WhatsApp), a tela de revisão continua como
+  antes: só os campos do próprio laudo (nome, valor, unidade, referência, status), sem
+  nenhuma sugestão de padronização.
+- **A tela "Catálogo de exames"** (botão no topo da aba Exames, dentro do perfil) é onde a
+  padronização acontece, com duas partes:
+  - **Unificar existentes**: lista os nomes de exames já salvos que ainda não estão
+    padronizados. Um botão "Sugerir agrupamentos com IA" analisa essa lista e propõe quais
+    nomes são o mesmo exame (você confirma ou ignora cada sugestão); também dá pra
+    selecionar manualmente quais nomes unificar. Ao confirmar um grupo, você define o nome
+    padrão e a referência única (a IA só ajuda a agrupar os nomes — a referência final é
+    sempre uma decisão sua).
+  - **Exames padrão**: lista o catálogo já criado, com edição do nome/unidade/referência
+    (a edição é aplicada retroativamente a todo o histórico que usa aquele exame) e
+    remoção.
+- O nome e a referência originais de cada laudo continuam guardados (não se perdem) mesmo
+  depois de padronizados, para eventual conferência.
+
 ## Estrutura
 
 ```

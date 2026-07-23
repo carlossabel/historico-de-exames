@@ -6,7 +6,7 @@ import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import db, { pdfDir, bodyPhotoDir, invoiceDir, whatsappDir } from "./db.js";
-import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, INVOICE_EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, buildBodyAgePrompt, buildBodyMetricInfoPrompt, BODY_PHOTO_EXTRACTION_PROMPT } from "./anthropic.js";
+import { callClaude, parseExamJson, repairJson, extractJsonBlock, EXTRACTION_PROMPT, INVOICE_EXTRACTION_PROMPT, buildAlertsPrompt, buildTipsPrompt, buildExamInfoPrompt, buildBodyAgePrompt, buildBodyMetricInfoPrompt, BODY_PHOTO_EXTRACTION_PROMPT, buildExamMatchPrompt, buildExamGroupingPrompt, parseRefBounds, computeStatusFromRef } from "./anthropic.js";
 import { verifyWebhook, handleWebhook, normalizePhone } from "./whatsapp.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +19,129 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 *
 
 function uid() {
   return crypto.randomBytes(8).toString("hex");
+}
+
+// ---------- Catálogo de exames padrão ----------
+// Unifica nomes de exames diferentes entre laboratórios (ex: "Hemoglobina" vs "Hb") e
+// garante uma única referência/unidade por exame, independente de qual laudo trouxe o
+// resultado.
+function normalizeExamName(name) {
+  return (name || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function listCatalog() {
+  return db.prepare("SELECT id, name, unit, ref, category FROM exam_catalog ORDER BY name ASC").all();
+}
+
+function findAlias(rawName) {
+  const row = db.prepare("SELECT catalog_id FROM exam_aliases WHERE raw_name = ?").get(normalizeExamName(rawName));
+  return row ? row.catalog_id : null;
+}
+
+function saveAlias(rawName, catalogId) {
+  const norm = normalizeExamName(rawName);
+  if (!norm) return;
+  const existing = db.prepare("SELECT id FROM exam_aliases WHERE raw_name = ?").get(norm);
+  if (existing) {
+    db.prepare("UPDATE exam_aliases SET catalog_id = ? WHERE raw_name = ?").run(catalogId, norm);
+  } else {
+    db.prepare("INSERT INTO exam_aliases (id, raw_name, catalog_id, created_at) VALUES (?,?,?,?)").run(uid(), norm, catalogId, Date.now());
+  }
+}
+
+// Para cada nome de exame extraído de um laudo, tenta achar automaticamente um exame
+// já cadastrado no catálogo: primeiro por apelido exato conhecido (grátis, sem IA); o
+// que sobrar vai numa única chamada de IA junto com a lista do catálogo. Retorna os
+// mesmos itens recebidos, acrescidos de catalogId/catalogName/catalogUnit/catalogRef
+// (quando achou) e matchStatus: "alias" | "ai" | "new".
+// Reservada para quando a padronização automática na importação for ativada de novo —
+// hoje não é chamada em nenhum lugar: a decisão de nome/referência padrão só acontece
+// manualmente na tela de reconciliação (ver rotas /api/exam-catalog/* mais abaixo).
+async function matchExamsToCatalog(examItems) {
+  const catalog = listCatalog();
+  const byId = Object.fromEntries(catalog.map((c) => [c.id, c]));
+  const results = examItems.map((item) => ({ ...item }));
+
+  const pending = [];
+  results.forEach((item, idx) => {
+    const aliasId = findAlias(item.n || item.name);
+    if (aliasId && byId[aliasId]) {
+      Object.assign(item, {
+        catalogId: aliasId, catalogName: byId[aliasId].name, catalogUnit: byId[aliasId].unit,
+        catalogRef: byId[aliasId].ref, matchStatus: "alias",
+      });
+    } else {
+      pending.push(idx);
+    }
+  });
+
+  if (pending.length > 0) {
+    try {
+      const rawNames = pending.map((idx) => results[idx].n || results[idx].name || "");
+      const prompt = buildExamMatchPrompt(catalog, rawNames);
+      const text = await callClaude([{ role: "user", content: prompt }], 2000);
+      const parsed = parseExamJson(text);
+      const matches = Array.isArray(parsed.matches) ? parsed.matches : [];
+      matches.forEach((m) => {
+        const idx = pending[m.i];
+        if (idx === undefined) return;
+        const item = results[idx];
+        if (m.id && byId[m.id]) {
+          Object.assign(item, {
+            catalogId: byId[m.id].id, catalogName: byId[m.id].name, catalogUnit: byId[m.id].unit,
+            catalogRef: byId[m.id].ref, matchStatus: "ai",
+          });
+        } else {
+          Object.assign(item, {
+            catalogId: null, catalogName: m.nomePadrao || item.n || item.name || "",
+            catalogUnit: item.u || item.unit || "", catalogRef: item.r || item.ref || "", matchStatus: "new",
+          });
+        }
+      });
+    } catch (e) {
+      console.error("Falha ao casar exames com o catálogo (seguindo sem sugestão):", e.message);
+      pending.forEach((idx) => {
+        const item = results[idx];
+        Object.assign(item, {
+          catalogId: null, catalogName: item.n || item.name || "",
+          catalogUnit: item.u || item.unit || "", catalogRef: item.r || item.ref || "", matchStatus: "new",
+        });
+      });
+    }
+  }
+
+  return results;
+}
+
+// Resolve o exame final (nome/unidade/referência padronizados) de um resultado que já
+// passou pela tela de revisão, criando uma nova entrada no catálogo se for a primeira
+// vez que esse exame aparece, e sempre gravando o apelido pra reconhecer esse laudo
+// automaticamente da próxima vez.
+function resolveCatalogForResult(r) {
+  let catalogRow = null;
+  if (r.catalogId) {
+    catalogRow = db.prepare("SELECT id, name, unit, ref, category FROM exam_catalog WHERE id = ?").get(r.catalogId);
+  }
+  if (!catalogRow && r.catalogName && r.catalogName.trim()) {
+    // Nova entrada de catálogo (usuário confirmou um exame ainda não cadastrado).
+    const id = uid();
+    const now = Date.now();
+    db.prepare("INSERT INTO exam_catalog (id, name, unit, ref, category, created_at, updated_at) VALUES (?,?,?,?,?,?,?)").run(
+      id, r.catalogName.trim(), r.catalogUnit || r.unit || "", r.catalogRef || r.ref || "", r.category || "Outro", now, now
+    );
+    catalogRow = { id, name: r.catalogName.trim(), unit: r.catalogUnit || r.unit || "", ref: r.catalogRef || r.ref || "", category: r.category || "Outro" };
+  }
+  if (catalogRow) {
+    saveAlias(r.name, catalogRow.id);
+    const bounds = parseRefBounds(catalogRow.ref);
+    const status = computeStatusFromRef(r.value, bounds, r.status);
+    return {
+      name: catalogRow.name, unit: catalogRow.unit || r.unit || "", ref: catalogRow.ref || r.ref || "",
+      status, catalogId: catalogRow.id, rawName: r.name || "", rawRef: r.ref || "",
+    };
+  }
+  // Sem padronização (usuário optou por não padronizar essa linha): mantém como veio.
+  return { name: r.name || "", unit: r.unit || "", ref: r.ref || "", status: r.status || "N", catalogId: null, rawName: r.name || "", rawRef: r.ref || "" };
 }
 
 // ---------- Profiles ----------
@@ -148,7 +271,9 @@ app.get("/api/profiles/:profileId/batches/:batchId", (req, res) => {
   const { batchId } = req.params;
   const batch = db.prepare("SELECT id, date, lab, doctor FROM batches WHERE id = ?").get(batchId);
   if (!batch) return res.status(404).json({ error: "Não encontrado" });
-  const results = db.prepare("SELECT id, name, value, unit, ref, status, category FROM results WHERE batch_id = ?").all(batchId);
+  const results = db
+    .prepare("SELECT id, name, value, unit, ref, status, category, catalog_id as catalogId, raw_name as rawName FROM results WHERE batch_id = ?")
+    .all(batchId);
   res.json({ ...batch, results });
 });
 
@@ -185,6 +310,141 @@ app.delete("/api/profiles/:profileId/batches/:batchId", (req, res) => {
   db.prepare("DELETE FROM results WHERE batch_id = ?").run(batchId);
   db.prepare("DELETE FROM batches WHERE id = ?").run(batchId);
   res.json({ ok: true });
+});
+
+// ---------- Catálogo de exames padrão ----------
+// Lista o catálogo com quantos resultados salvos usam cada entrada e quantos apelidos
+// (redações de laboratório) já foram aprendidos para ela.
+app.get("/api/exam-catalog", (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT c.id, c.name, c.unit, c.ref, c.category,
+              (SELECT COUNT(*) FROM results r WHERE r.catalog_id = c.id) as resultCount,
+              (SELECT COUNT(*) FROM exam_aliases a WHERE a.catalog_id = c.id) as aliasCount
+       FROM exam_catalog c ORDER BY c.name ASC`
+    )
+    .all();
+  res.json(rows);
+});
+
+// Nomes distintos já salvos em `results` que ainda não estão ligados a nenhuma entrada
+// do catálogo — candidatos a serem unificados manualmente (útil para o histórico salvo
+// antes desse recurso existir). Agrupa por nome normalizado e mostra quantas vezes cada
+// grafia aparece.
+app.get("/api/exam-catalog/unmatched", (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT name, COUNT(*) as count, MIN(unit) as unit, MIN(ref) as ref
+       FROM results WHERE catalog_id IS NULL AND name IS NOT NULL AND TRIM(name) != ''
+       GROUP BY LOWER(TRIM(name)) ORDER BY name ASC`
+    )
+    .all();
+  res.json(rows);
+});
+
+// Edita uma entrada do catálogo (nome, unidade, referência). Isso é propagado (cascata)
+// para todos os resultados já salvos que apontam pra essa entrada, incluindo recálculo
+// do status (N/A/F) se a referência mudou.
+app.put("/api/exam-catalog/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = db.prepare("SELECT * FROM exam_catalog WHERE id = ?").get(id);
+    if (!existing) return res.status(404).json({ error: "Exame não encontrado no catálogo" });
+    const name = (req.body?.name ?? existing.name).trim();
+    const unit = req.body?.unit ?? existing.unit ?? "";
+    const ref = req.body?.ref ?? existing.ref ?? "";
+    const category = req.body?.category ?? existing.category ?? "Outro";
+    if (!name) return res.status(400).json({ error: "Nome não pode ficar vazio" });
+    db.prepare("UPDATE exam_catalog SET name=?, unit=?, ref=?, category=?, updated_at=? WHERE id=?").run(name, unit, ref, category, Date.now(), id);
+
+    const bounds = parseRefBounds(ref);
+    const affected = db.prepare("SELECT id, value, status FROM results WHERE catalog_id = ?").all(id);
+    const updateResult = db.prepare("UPDATE results SET name=?, unit=?, ref=?, status=? WHERE id=?");
+    for (const r of affected) {
+      const status = computeStatusFromRef(r.value, bounds, r.status);
+      updateResult.run(name, unit, ref, status, r.id);
+    }
+    res.json({ ok: true, affected: affected.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao atualizar exame do catálogo" });
+  }
+});
+
+// Remove uma entrada do catálogo. Os resultados que apontavam pra ela voltam a ficar
+// "sem padronização" (mantêm o nome/unidade/referência que já tinham, só perdem o vínculo).
+app.delete("/api/exam-catalog/:id", (req, res) => {
+  const { id } = req.params;
+  db.prepare("UPDATE results SET catalog_id = NULL WHERE catalog_id = ?").run(id);
+  db.prepare("DELETE FROM exam_aliases WHERE catalog_id = ?").run(id);
+  db.prepare("DELETE FROM exam_catalog WHERE id = ?").run(id);
+  res.json({ ok: true });
+});
+
+// Reconciliação em lote: junta um conjunto de nomes já salvos (ex: "Hemoglobina", "Hb",
+// "HGB") — que hoje aparecem como exames separados — numa única entrada do catálogo,
+// criando-a se preciso, atualizando todos os resultados já salvos com esses nomes e
+// registrando os apelidos correspondentes.
+app.post("/api/exam-catalog/reconcile", (req, res) => {
+  try {
+    const { names, catalogId, newName, unit, ref, category } = req.body || {};
+    if (!Array.isArray(names) || names.length === 0) return res.status(400).json({ error: "Selecione ao menos um nome" });
+
+    let catalogRow;
+    if (catalogId) {
+      catalogRow = db.prepare("SELECT * FROM exam_catalog WHERE id = ?").get(catalogId);
+      if (!catalogRow) return res.status(404).json({ error: "Exame padrão não encontrado" });
+      if (unit !== undefined || ref !== undefined) {
+        db.prepare("UPDATE exam_catalog SET unit=?, ref=?, updated_at=? WHERE id=?").run(unit ?? catalogRow.unit, ref ?? catalogRow.ref, Date.now(), catalogId);
+        catalogRow = { ...catalogRow, unit: unit ?? catalogRow.unit, ref: ref ?? catalogRow.ref };
+      }
+    } else {
+      if (!newName || !newName.trim()) return res.status(400).json({ error: "Informe o nome padrão" });
+      const id = uid();
+      const now = Date.now();
+      db.prepare("INSERT INTO exam_catalog (id, name, unit, ref, category, created_at, updated_at) VALUES (?,?,?,?,?,?,?)").run(
+        id, newName.trim(), unit || "", ref || "", category || "Outro", now, now
+      );
+      catalogRow = { id, name: newName.trim(), unit: unit || "", ref: ref || "" };
+    }
+
+    const bounds = parseRefBounds(catalogRow.ref);
+    let totalAffected = 0;
+    for (const rawName of names) {
+      const norm = normalizeExamName(rawName);
+      if (!norm) continue;
+      const rows = db.prepare("SELECT id, value, status FROM results WHERE LOWER(TRIM(name)) = ?").all(norm);
+      for (const r of rows) {
+        const status = computeStatusFromRef(r.value, bounds, r.status);
+        db.prepare("UPDATE results SET name=?, unit=?, ref=?, status=?, catalog_id=? WHERE id=?").run(catalogRow.name, catalogRow.unit || "", catalogRow.ref || "", status, catalogRow.id, r.id);
+      }
+      totalAffected += rows.length;
+      saveAlias(rawName, catalogRow.id);
+    }
+    res.json({ ok: true, catalogId: catalogRow.id, affected: totalAffected });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao unificar exames" });
+  }
+});
+
+// Sugere agrupamentos (via IA) dos nomes ainda não padronizados, pra tela de reconciliação
+// não precisar que o usuário identifique manualmente quais nomes são o mesmo exame.
+app.post("/api/exam-catalog/suggest-groups", async (req, res) => {
+  try {
+    const { names } = req.body || {};
+    if (!Array.isArray(names) || names.length === 0) return res.status(400).json({ error: "Nenhum nome para agrupar" });
+    const text = await callClaude([{ role: "user", content: buildExamGroupingPrompt(names) }], 3000);
+    const parsed = parseExamJson(text);
+    const grupos = Array.isArray(parsed.grupos) ? parsed.grupos : [];
+    const groups = grupos
+      .map((g) => ({
+        names: (Array.isArray(g.indices) ? g.indices : []).map((i) => names[i]).filter(Boolean),
+        suggestedName: g.nomePadrao || "",
+      }))
+      .filter((g) => g.names.length > 0);
+    res.json({ groups });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Erro ao sugerir agrupamentos" });
+  }
 });
 
 // ---------- Body composition (composição corporal) ----------
@@ -722,6 +982,9 @@ app.post("/api/extract", upload.single("file"), async (req, res) => {
       8000
     );
     const parsed = parseExamJson(text);
+    // Nota: a padronização (nome/referência únicos) não é sugerida automaticamente aqui —
+    // por enquanto isso fica só na tela de reconciliação (dentro do perfil), pra decidir
+    // manualmente e ganhar confiança antes de automatizar.
     res.json({ ...parsed, hash, base64, fileName: req.file.originalname });
   } catch (e) {
     res.status(500).json({ error: e.message || "Erro ao processar PDF" });
@@ -749,10 +1012,14 @@ app.post("/api/profiles/:profileId/batches", (req, res) => {
     ).run(batchId, profileId, date || null, lab || "", doctor || "", hash || null, fileName || "exame.pdf", hasPdf, Date.now());
 
     const insertResult = db.prepare(
-      "INSERT INTO results (id, batch_id, name, value, unit, ref, status, category) VALUES (?,?,?,?,?,?,?,?)"
+      "INSERT INTO results (id, batch_id, name, value, unit, ref, status, category, catalog_id, raw_name, raw_ref) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
     );
     for (const r of results) {
-      insertResult.run(uid(), batchId, r.name || "", r.value ?? "", r.unit || "", r.ref || "", r.status || "N", r.category || "Outro");
+      const resolved = resolveCatalogForResult(r);
+      insertResult.run(
+        uid(), batchId, resolved.name, r.value ?? "", resolved.unit, resolved.ref, resolved.status,
+        r.category || "Outro", resolved.catalogId, resolved.rawName, resolved.rawRef
+      );
     }
     res.json({ batchId });
   } catch (e) {

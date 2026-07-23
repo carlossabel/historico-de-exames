@@ -119,6 +119,103 @@ Regras:
 - Nao invente valores. Se um campo nao existir, use string vazia.
 - Responda em portugues.`;
 
+// Prompt usado para casar nomes de exames vindos de um laudo (redação livre, varia por
+// laboratório) contra o catálogo de "exames padrão" já cadastrado no app. Só é chamado
+// para nomes que não bateram com nenhum apelido (exam_aliases) já conhecido.
+export function buildExamMatchPrompt(catalog, rawNames) {
+  const catalogText = catalog.length
+    ? catalog.map((c) => `- id:${c.id} | nome:"${c.name}" | unidade:"${c.unit || ""}" | referência:"${c.ref || ""}"`).join("\n")
+    : "(catálogo vazio — nenhum exame padrão cadastrado ainda)";
+  const namesText = rawNames.map((n, i) => `${i}. "${n}"`).join("\n");
+  return `Você ajuda a unificar nomes de exames laboratoriais que vêm escritos de forma diferente entre laboratórios, mas que são o mesmo exame (ex: "Hemoglobina", "Hb", "HGB" e "Hemoglobina (sangue total)" são o mesmo exame).
+
+Catálogo de exames padrão já existentes:
+${catalogText}
+
+Nomes de exames encontrados num novo laudo, que precisam ser casados contra o catálogo acima (ou reconhecidos como um exame novo, ainda não cadastrado):
+${namesText}
+
+Para cada nome (na mesma ordem, por índice), decida:
+- Se ele é o MESMO exame que algum item do catálogo (mesmo quando a redação, abreviação ou capitalização for diferente), retorne o "id" daquele item do catálogo.
+- Se não corresponder com confiança a nenhum item do catálogo, retorne "id":null e sugira um "nomePadrao" limpo e comum em português para esse exame (sem abreviações de laboratório específico, ex: "Hemoglobina" em vez de "HB").
+- Nunca junte dois exames diferentes sob o mesmo id só por serem parecidos (ex: "Colesterol Total" e "Colesterol LDL" são exames DIFERENTES, não devem casar entre si).
+
+Responda APENAS com JSON válido, sem markdown, sem comentários, sem texto antes ou depois, no formato exato:
+{"matches":[{"i":indice,"id":"id do catalogo ou null","nomePadrao":"nome sugerido (preencha mesmo quando id não for null, repetindo o nome do catálogo)","confianca":"alta|media|baixa"}]}`;
+}
+
+// Tenta extrair limites numéricos (mínimo/máximo) de um texto de referência em
+// português livre, pra poder recalcular o status (N/A/F) de forma consistente
+// quando o exame tiver uma referência única cadastrada no catálogo. Retorna
+// null se não conseguir interpretar o texto com segurança (nesse caso o status
+// informado manualmente/pela IA na extração é mantido).
+export function parseRefBounds(ref) {
+  if (!ref || typeof ref !== "string") return null;
+  const t = ref.trim().toLowerCase().replace(",", ".");
+
+  // "12.0 - 15.5" ou "12.0 a 15.5" ou "12.0 até 15.5"
+  let m = t.match(/(-?\d+(?:\.\d+)?)\s*(?:-|a|até|ate)\s*(-?\d+(?:\.\d+)?)/);
+  if (m) {
+    const low = parseFloat(m[1]);
+    const high = parseFloat(m[2]);
+    if (!isNaN(low) && !isNaN(high) && low <= high) return { low, high };
+  }
+
+  // "< 5.7" / "menor que 5.7" / "até 5.7" / "inferior a 5.7"
+  m = t.match(/(?:<|menor que|inferior a|até|ate|abaixo de)\s*(-?\d+(?:\.\d+)?)/);
+  if (m) {
+    const high = parseFloat(m[1]);
+    if (!isNaN(high)) return { low: null, high };
+  }
+
+  // "> 40" / "maior que 40" / "acima de 40" / "superior a 40"
+  m = t.match(/(?:>|maior que|superior a|acima de)\s*(-?\d+(?:\.\d+)?)/);
+  if (m) {
+    const low = parseFloat(m[1]);
+    if (!isNaN(low)) return { low, high: null };
+  }
+
+  return null;
+}
+
+// Recalcula o status (N/A/F) a partir do valor numérico e dos limites da referência
+// padronizada. Se o valor não for numérico ou os limites não puderem ser interpretados,
+// devolve o status de fallback (o que veio da extração/edição manual) sem alterar nada.
+export function computeStatusFromRef(value, bounds, fallbackStatus) {
+  if (!bounds) return fallbackStatus || "N";
+  const v = parseFloat(String(value).replace(",", "."));
+  if (isNaN(v)) return fallbackStatus || "N";
+  const { low, high } = bounds;
+  if (low != null && v < low) return "F";
+  if (high != null && v > high) return "F";
+  if (low != null && high != null) {
+    const span = high - low;
+    const margin = span * 0.05;
+    if (v <= low + margin || v >= high - margin) return "A";
+  }
+  return "N";
+}
+
+// Agrupa uma lista de nomes de exames já salvos (sem padronização ainda) em clusters do
+// mesmo exame, para a tela de reconciliação do catálogo (ex: unir de uma vez "Hemoglobina",
+// "Hb" e "HGB" que já existem separados no histórico).
+export function buildExamGroupingPrompt(names) {
+  const namesText = names.map((n, i) => `${i}. "${n}"`).join("\n");
+  return `Você ajuda a organizar uma lista de nomes de exames laboratoriais que vieram de laudos de laboratórios diferentes, alguns dos quais são o MESMO exame escrito de forma diferente (ex: "Hemoglobina", "Hb" e "HGB" são o mesmo exame; "Colesterol Total" e "Colesterol LDL" são exames diferentes).
+
+Lista de nomes (por índice):
+${namesText}
+
+Agrupe os índices que representam o mesmo exame. Nomes que não têm nenhum outro duplicado na lista também devem aparecer, cada um em seu próprio grupo. Para cada grupo, sugira um nome padrão limpo e comum em português (sem abreviações de laboratório específico).
+
+Responda APENAS com JSON válido, sem markdown, sem comentários, sem texto antes ou depois, no formato exato:
+{"grupos":[{"indices":[0,3,7],"nomePadrao":"Hemoglobina"}]}
+
+Regras:
+- Cada índice da lista original deve aparecer em exatamente um grupo.
+- Só agrupe nomes que tenham certeza razoável de serem o mesmo exame; na dúvida, deixe em grupos separados.`;
+}
+
 export const CLASSIFY_DOCUMENT_PROMPT = `Você recebe um documento (PDF ou foto) enviado por uma pessoa pelo WhatsApp para um app de histórico de saúde e notas fiscais. Classifique o tipo de documento. Responda APENAS com JSON válido, sem markdown, sem comentários, sem texto antes ou depois, em um destes três formatos exatos:
 {"tipo":"exame"}
 {"tipo":"nota_fiscal"}
