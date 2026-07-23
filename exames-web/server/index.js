@@ -13,6 +13,7 @@ import { verifyWebhook, handleWebhook, normalizePhone } from "./whatsapp.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.set("trust proxy", 1); // necessário pra montar a URL de callback do Strava/Google corretamente atrás do proxy do Railway
+app.set("etag", false); // evita respostas 304 "coladas" em cache no navegador pra rotas de API dinâmicas (ex: config de login, sessão)
 app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
 app.use(express.json({ limit: "60mb", verify: (req, res, buf) => { req.rawBody = buf; } }));
@@ -109,10 +110,12 @@ app.param("profileId", (req, res, next, profileId) => {
 });
 
 app.get("/api/auth/config", (req, res) => {
+  res.set("Cache-Control", "no-store");
   res.json({ googleConfigured: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) });
 });
 
 app.get("/api/auth/me", (req, res) => {
+  res.set("Cache-Control", "no-store");
   const user = getSessionUser(req);
   if (!user) return res.status(401).json({ error: "Não autenticado" });
   res.json(user);

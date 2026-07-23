@@ -12,7 +12,7 @@ import * as api from "./api.js";
 // Etiqueta de versão/build — atualizada a cada arquivo novo entregue na conversa, pra dar
 // pra comparar rapidinho "o que está no ar" vs "o que foi gerado", sem precisar abrir o console.
 // Aparece discretamente no rodapé da tela inicial.
-const APP_BUILD = "2026-07-23n · Login com Google obrigatório, compartilhamento de perfis por e-mail (\"perfil da família\") e área de administração — veja o README para configurar GOOGLE_CLIENT_ID/SECRET no Railway";
+const APP_BUILD = "2026-07-23o · Corrigido: /api/auth/config e outras rotas de API estavam sendo cacheadas pelo navegador (respostas 304), fazendo o app achar que o login do Google não estava configurado mesmo depois de salvar as variáveis";
 
 const STATUS_META = {
   N: { label: "Ideal", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700" },
